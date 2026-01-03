@@ -128,7 +128,13 @@ def simulate_trades(
         else:
             ss = get_session_state(entry_time)
 
-        risk_mult = 1.0 if ss == "PRIMARY" else (0.5 if ss == "SECONDARY" else 0.0)
+        if str(c.meta.get("quality", "")) == "SKIP":
+            continue
+        risk_mult_raw = c.meta.get("risk_multiplier")
+        if risk_mult_raw is None:
+            risk_mult = 1.0 if ss == "PRIMARY" else (0.5 if ss == "SECONDARY" else 0.0)
+        else:
+            risk_mult = float(risk_mult_raw)
         if risk_mult <= 0.0:
             continue
 

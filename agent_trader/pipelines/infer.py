@@ -7,6 +7,7 @@ import pandas as pd
 
 from agent_trader.config import DEFAULT_CONFIG
 from agent_trader.data.csv_loader import load_ohlcv_csv
+from agent_trader.data.mt5_loader import load_recent_multi_timeframe
 from agent_trader.execution.signal_writer import make_signal, write_signal_csv
 from agent_trader.features.builder import build_feature_rows
 from agent_trader.ml.model import load_model, predict_proba
@@ -16,9 +17,14 @@ from agent_trader.strategy.generator import CandidateInputs, generate_candidates
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--h4", required=True)
-    ap.add_argument("--h1", required=True)
-    ap.add_argument("--m15", required=True)
+    ap.add_argument("--source", choices=["csv", "mt5"], default="csv")
+    ap.add_argument("--h4", default="")
+    ap.add_argument("--h1", default="")
+    ap.add_argument("--m15", default="")
+    ap.add_argument("--symbol", default=DEFAULT_CONFIG.symbol)
+    ap.add_argument("--bars-m15", type=int, default=1500)
+    ap.add_argument("--bars-h1", type=int, default=800)
+    ap.add_argument("--bars-h4", type=int, default=500)
     ap.add_argument("--model", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--min-prob", type=float, default=0.60)
@@ -26,9 +32,21 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = DEFAULT_CONFIG
-    h4 = load_ohlcv_csv(args.h4, schema="generic")
-    h1 = load_ohlcv_csv(args.h1, schema="generic")
-    m15 = load_ohlcv_csv(args.m15, schema="generic")
+    if args.source == "mt5":
+        frames = load_recent_multi_timeframe(
+            symbol=str(args.symbol),
+            bars_by_tf={"M15": int(args.bars_m15), "H1": int(args.bars_h1), "H4": int(args.bars_h4)},
+            timezone="UTC",
+        )
+        h4 = frames["H4"]
+        h1 = frames["H1"]
+        m15 = frames["M15"]
+    else:
+        if not args.h4 or not args.h1 or not args.m15:
+            raise SystemExit("--h4/--h1/--m15 are required when --source=csv")
+        h4 = load_ohlcv_csv(args.h4, schema="generic")
+        h1 = load_ohlcv_csv(args.h1, schema="generic")
+        m15 = load_ohlcv_csv(args.m15, schema="generic")
 
     artifacts = load_model(args.model)
 

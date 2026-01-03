@@ -6,6 +6,10 @@ extern string InboxSubdir = "agent_trader\\inbox";
 extern double Lots = 0.10;
 extern int SlippagePoints = 20;
 extern int MagicNumber = 240102;
+extern bool BlockIfAnyOpenPosition = false;
+extern int MaxTradesPerDay = 3;
+extern double MaxDailyLossMoney = 50.0;
+extern double MaxSpreadPips = 2.5;
 extern bool BreakEvenEnabled = true;
 extern double BreakEvenTriggerPips = 10.0;
 extern bool TrailingEnabled = false;
@@ -27,6 +31,82 @@ double PipValue()
 double PipsToPrice(double pips)
 {
    return pips * PipValue();
+}
+
+string DayKey()
+{
+   datetime now = TimeCurrent();
+   int y = TimeYear(now);
+   int m = TimeMonth(now);
+   int d = TimeDay(now);
+   return IntegerToString(y) + StringFormat("%02d", m) + StringFormat("%02d", d);
+}
+
+string GVKey(const string suffix)
+{
+   return "AgentTrader_" + IntegerToString(MagicNumber) + "_" + suffix + "_" + DayKey();
+}
+
+double GetStartBalance()
+{
+   string key = GVKey("start_balance");
+   if(!GlobalVariableCheck(key))
+   {
+      double b = AccountBalance();
+      GlobalVariableSet(key, b);
+      return b;
+   }
+   return GlobalVariableGet(key);
+}
+
+int GetTradesToday()
+{
+   string key = GVKey("trades");
+   if(!GlobalVariableCheck(key))
+   {
+      GlobalVariableSet(key, 0.0);
+      return 0;
+   }
+   return (int)GlobalVariableGet(key);
+}
+
+void IncTradesToday()
+{
+   string key = GVKey("trades");
+   int n = GetTradesToday();
+   GlobalVariableSet(key, (double)(n + 1));
+}
+
+double CurrentSpreadPips()
+{
+   double pip = PipValue();
+   if(pip <= 0.0)
+      return 9999.0;
+   return (Ask - Bid) / pip;
+}
+
+bool StopsValid(const bool buy, const double sl, const double tp)
+{
+   int stop_level = (int)MarketInfo(Symbol(), MODE_STOPLEVEL);
+   double min_dist = (double)stop_level * Point;
+   double price = buy ? Ask : Bid;
+   if(min_dist <= 0.0)
+      return true;
+   if(buy)
+   {
+      if(sl >= price || tp <= price)
+         return false;
+      if((price - sl) < min_dist || (tp - price) < min_dist)
+         return false;
+   }
+   else
+   {
+      if(sl <= price || tp >= price)
+         return false;
+      if((sl - price) < min_dist || (price - tp) < min_dist)
+         return false;
+   }
+   return true;
 }
 
 bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, double &entry, double &sl, double &tp, double &confluence, double &prob, string &session_state, string &regime, string &quality, double &risk_mult, string &mode, string &filename_out)
@@ -103,7 +183,11 @@ bool HasOpenPosition()
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
          continue;
-      if(OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber)
+      if(OrderSymbol() != Symbol())
+         continue;
+      if(BlockIfAnyOpenPosition)
+         return true;
+      if(OrderMagicNumber() == MagicNumber)
          return true;
    }
    return false;
@@ -241,6 +325,17 @@ int start()
    if(quality == "SKIP" || risk_mult <= 0.0)
       do_trade = false;
 
+   int trades_today = GetTradesToday();
+   double start_balance = GetStartBalance();
+   double daily_pnl = AccountBalance() - start_balance;
+   double spread_pips = CurrentSpreadPips();
+   if(trades_today >= MaxTradesPerDay)
+      do_trade = false;
+   if(MaxDailyLossMoney > 0.0 && daily_pnl <= -MaxDailyLossMoney)
+      do_trade = false;
+   if(MaxSpreadPips > 0.0 && spread_pips > MaxSpreadPips)
+      do_trade = false;
+
    if(do_trade)
    {
       double lots = Lots * risk_mult;
@@ -252,12 +347,18 @@ int start()
 
       int cmd = (side == "buy") ? OP_BUY : OP_SELL;
       double price = (cmd == OP_BUY) ? Ask : Bid;
-      int ticket = OrderSend(Symbol(), cmd, lots, price, SlippagePoints, sl, tp, "AgentTrader", MagicNumber, 0, clrNONE);
-      if(ticket < 0)
-         Print("OrderSend failed: ", GetLastError());
+      double sl_n = NormalizeDouble(sl, Digits);
+      double tp_n = NormalizeDouble(tp, Digits);
+      if(StopsValid(cmd == OP_BUY, sl_n, tp_n))
+      {
+         int ticket = OrderSend(Symbol(), cmd, lots, price, SlippagePoints, sl_n, tp_n, "AgentTrader", MagicNumber, 0, clrNONE);
+         if(ticket < 0)
+            Print("OrderSend failed: ", GetLastError());
+         else
+            IncTradesToday();
+      }
    }
 
    MarkSignalConsumed(filename);
    return 0;
 }
-

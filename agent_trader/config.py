@@ -15,7 +15,8 @@ class TradingConfig:
     day_end_cutoff: time = time(21, 30)
     min_rr: float = 1.2
     max_trades_per_week: int = 5
+    max_spread_pips: float = 2.5
+    max_signals_per_day: int = 3
 
 
 DEFAULT_CONFIG = TradingConfig()
-

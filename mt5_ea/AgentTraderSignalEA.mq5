@@ -5,6 +5,11 @@ input bool VisualOnly = true;
 input string InboxSubdir = "agent_trader\\inbox";
 input double Lots = 0.10;
 input int SlippagePoints = 20;
+input long MagicNumber = 240102;
+input bool BlockIfAnyOpenPosition = false;
+input int MaxTradesPerDay = 3;
+input double MaxDailyLossMoney = 50.0;
+input double MaxSpreadPips = 2.5;
 input bool BreakEvenEnabled = true;
 input double BreakEvenTriggerPips = 10.0;
 input bool TrailingEnabled = false;
@@ -26,6 +31,84 @@ double PipValue()
 double PipsToPrice(double pips)
 {
    return pips * PipValue();
+}
+
+string DayKey()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   return IntegerToString(dt.year) + StringFormat("%02d", dt.mon) + StringFormat("%02d", dt.day);
+}
+
+string GVKey(const string suffix)
+{
+   return "AgentTrader_" + IntegerToString((int)MagicNumber) + "_" + suffix + "_" + DayKey();
+}
+
+double GetStartBalance()
+{
+   string key = GVKey("start_balance");
+   if(!GlobalVariableCheck(key))
+   {
+      double b = AccountInfoDouble(ACCOUNT_BALANCE);
+      GlobalVariableSet(key, b);
+      return b;
+   }
+   return GlobalVariableGet(key);
+}
+
+int GetTradesToday()
+{
+   string key = GVKey("trades");
+   if(!GlobalVariableCheck(key))
+   {
+      GlobalVariableSet(key, 0.0);
+      return 0;
+   }
+   return (int)GlobalVariableGet(key);
+}
+
+void IncTradesToday()
+{
+   string key = GVKey("trades");
+   int n = GetTradesToday();
+   GlobalVariableSet(key, (double)(n + 1));
+}
+
+double CurrentSpreadPips()
+{
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double pip = PipValue();
+   if(pip <= 0.0)
+      return 9999.0;
+   return (ask - bid) / pip;
+}
+
+bool StopsValid(const bool buy, const double sl, const double tp)
+{
+   int stops_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double min_dist = (double)stops_level * _Point;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double price = buy ? ask : bid;
+   if(min_dist <= 0.0)
+      return true;
+   if(buy)
+   {
+      if(sl >= price || tp <= price)
+         return false;
+      if((price - sl) < min_dist || (tp - price) < min_dist)
+         return false;
+   }
+   else
+   {
+      if(sl <= price || tp >= price)
+         return false;
+      if((sl - price) < min_dist || (price - tp) < min_dist)
+         return false;
+   }
+   return true;
 }
 
 bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, double &entry, double &sl, double &tp, double &confluence, double &prob, string &session_state, string &regime, string &quality, double &risk_mult, string &mode, string &path_out)
@@ -103,7 +186,12 @@ bool HasOpenPosition()
       if(PositionSelectByIndex(i))
       {
          string sym = PositionGetString(POSITION_SYMBOL);
-         if(sym == _Symbol)
+         if(sym != _Symbol)
+            continue;
+         if(BlockIfAnyOpenPosition)
+            return true;
+         long mg = PositionGetInteger(POSITION_MAGIC);
+         if(mg == MagicNumber)
             return true;
       }
    }
@@ -256,6 +344,17 @@ void OnTick()
    if(quality == "SKIP" || risk_mult <= 0.0)
       do_trade = false;
 
+   int trades_today = GetTradesToday();
+   double start_balance = GetStartBalance();
+   double daily_pnl = AccountInfoDouble(ACCOUNT_BALANCE) - start_balance;
+   double spread_pips = CurrentSpreadPips();
+   if(trades_today >= MaxTradesPerDay)
+      do_trade = false;
+   if(MaxDailyLossMoney > 0.0 && daily_pnl <= -MaxDailyLossMoney)
+      do_trade = false;
+   if(MaxSpreadPips > 0.0 && spread_pips > MaxSpreadPips)
+      do_trade = false;
+
    if(do_trade)
    {
       MqlTradeRequest req;
@@ -266,16 +365,35 @@ void OnTick()
       req.symbol = _Symbol;
       req.volume = Lots * risk_mult;
       req.deviation = SlippagePoints;
-      req.type_filling = ORDER_FILLING_FOK;
+      req.magic = MagicNumber;
+      req.type_filling = (ENUM_ORDER_TYPE_FILLING)SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
 
       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       bool buy = (side == "buy");
       req.type = buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       req.price = buy ? ask : bid;
-      req.sl = sl;
-      req.tp = tp;
-      OrderSend(req, res);
+      int digs = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+      double sl_n = NormalizeDouble(sl, digs);
+      double tp_n = NormalizeDouble(tp, digs);
+      if(!StopsValid(buy, sl_n, tp_n))
+      {
+         do_trade = false;
+      }
+      else
+      {
+         req.sl = sl_n;
+         req.tp = tp_n;
+         if(OrderSend(req, res))
+         {
+            if(res.retcode == TRADE_RETCODE_DONE || res.retcode == TRADE_RETCODE_PLACED)
+               IncTradesToday();
+         }
+         else
+         {
+            Print("OrderSend failed: retcode=", (int)res.retcode);
+         }
+      }
    }
 
    MarkSignalConsumed(filename);
