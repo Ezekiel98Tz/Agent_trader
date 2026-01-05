@@ -64,8 +64,11 @@ def main() -> int:
         Path(args.out_dataset).parent.mkdir(parents=True, exist_ok=True)
         dataset.to_csv(args.out_dataset, index=False)
 
+    # Remove look-ahead features that are only known after the trade is over.
+    # Keeping these in would cause "feature leakage" and crash live trading.
+    drop_cols = ["time", "mfe_pips", "mae_pips", "minutes_to_outcome"]
     artifacts, metrics = train_probability_model(
-        dataset.drop(columns=["time"]),
+        dataset.drop(columns=[c for c in drop_cols if c in dataset.columns]),
         target_col="label",
         calibration=("none" if args.calibration == "none" else args.calibration),
     )

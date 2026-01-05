@@ -1,43 +1,77 @@
 # AgentTrader AI 🚀
 
-AgentTrader AI is a hybrid algorithmic trading system that combines classic technical analysis (Price Action) with a Machine Learning "Filter" to increase trade probability.
+AgentTrader AI is a high-performance, hybrid algorithmic trading system. It bridges the gap between **Classic Price Action** and **Modern Machine Learning**, using Python as the "Brain" and MetaTrader 4 (MT4) as the "Eyes and Hands."
 
-## 🧠 Core Philosophy
-The system operates on a "Safety First" principle:
-1.  **Rules-Based Generation**: A Python engine scans MT4 data for high-probability setups (Pin Bars, Engulfing Candles, FVGs, Trend Alignment).
-2.  **AI Validation**: A Random Forest classifier (the "AI Brain") analyzes 40+ features of each setup to decide if it's a "Real Move" or a "Market Trap."
-3.  **Execution**: Signals are sent back to MT4 only if both the Rules and the AI agree.
+---
 
-## 🛠 Project Structure
--   `agent_trader/strategy/`: Core logic for identifying trade candidates.
--   `agent_trader/ml/`: Machine learning models and training pipelines.
--   `agent_trader/features/`: Feature engineering (converts price data into AI-readable patterns).
--   `mt4_ea/`: The MetaTrader 4 Expert Advisor that exports data and executes signals.
--   `models/`: Stores your trained AI models (`.joblib`).
+## 🏗 How It Works: The 5 Stages
 
-## 🚀 Getting Started
+Our project follows a strictly modular workflow to ensure safety and precision.
 
-### 1. Data Export
-Attach the `AgentTrader_Master` EA to your MT4 charts (M15, H1, and H4). It will export CSV data to the `data/` folder.
+### **Stage 1: Data Acquisition (The Eyes)**
+The `AgentTrader_Master` EA sits on your MT4 terminal. Every 60 seconds, it "takes a snapshot" of the market by exporting historical data for three timeframes (H4, H1, and M15) into CSV files.
+- **Why?** This allows Python to see exactly what you see on your charts.
 
-### 2. Training the AI
-If you are running the bot for the first time or have added new historical data:
+### **Stage 2: Candidate Generation (The Scanner)**
+The Python engine scans the raw CSV data looking for specific **Rules-Based Setups**:
+- **Trend Alignment**: Is the H4 and H1 trend moving in the same direction?
+- **Price Action**: Are there Pin Bars or Engulfing Candles at key levels?
+- **Market Structure**: Are we near a Support/Resistance zone or inside a Fair Value Gap (FVG)?
+- **Result**: If these rules pass, a "Trade Candidate" is created.
+
+### **Stage 3: Feature Engineering (The Context)**
+The system doesn't just look at the candle; it looks at the **environment**. For every candidate, it calculates 40+ features:
+- **EMA Slopes**: How aggressive is the trend?
+- **Volatility (ATR)**: Is the market over-extended or quiet?
+- **Session State**: Are we in the London Open, New York Overlap, or "Off-Hours"?
+- **Confluence Score**: How many technical indicators agree on this move?
+
+### **Stage 4: AI Validation (The Brain)**
+This is where the magic happens. The candidate is passed to a **Random Forest Classifier** (your AI model). 
+- The AI looks at how similar setups performed in the past.
+- It predicts a **Probability Score** (e.g., 0.68 probability of a win).
+- **Quality Filter**: The `decide_quality` logic checks the session (PRIMARY vs SECONDARY) and probability to decide if the risk is worth taking.
+
+### **Stage 5: Signal Execution (The Hands)**
+If the AI gives a "Green Light":
+1. Python writes a `signal_XYZ.csv` file into the MT4 "Inbox."
+2. The MT4 EA detects this file immediately.
+3. It validates the risk (spread, daily loss limits, max trades).
+4. **Execution**: It places the BUY/SELL order with precise SL and TP levels.
+
+---
+
+## 🛠 Project Architecture
+- [generator.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/strategy/generator.py): The "Scanner" (Price Action rules).
+- [model.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/ml/model.py): The "AI Brain" (Random Forest logic).
+- [quality.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/policy/quality.py): The "Safety Officer" (Filters trades by session/probability).
+- [service.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/runtime/service.py): The "Heartbeat" (Keeps the loop running).
+
+---
+
+## 🚀 Quick Start Guide
+
+### 1. The Setup
+Attach `AgentTrader_Master` to your MT4 charts (M15, H1, H4). Ensure **"Allow DLL Imports"** is checked.
+
+### 2. The Training (Building the Brain)
+Run the initial training to teach the AI about your broker's data:
 ```bash
 run train_initial.bat
 ```
-This will process your MT4 history and create a custom AI model tailored to your specific pair and broker.
 
-### 3. Live Trading
+### 3. The Trading (Live Mode)
+Launch the AI monitoring service:
 ```bash
 run start_trading.bat
 ```
-The bot will now listen for new data from MT4, filter it through the AI, and send back `BUY`/`SELL` signals.
 
-## 📊 Key Features
--   **London Session Filter**: Optimized for London session volatility.
--   **Confluence Scoring**: Combines multiple technical indicators into a single "Confidence" metric.
--   **Automated Retraining**: Easily update your AI model as market conditions change.
--   **Risk Management**: Built-in logic for Stop Loss (SL) and Take Profit (TP) calculation based on ATR and structure.
+---
+
+## 📊 Safety First Philosophy
+- **London Session Focus**: The bot is most active during the London session (High Liquidity).
+- **Dynamic Risk**: It automatically reduces lot sizes during the "Secondary" session or for "Average" quality setups.
+- **Leakage Prevention**: Our training pipeline strictly removes "future data" to ensure the AI isn't cheating during backtests.
 
 ---
 *Disclaimer: Trading involves risk. This software is for educational and assistant purposes only.*
