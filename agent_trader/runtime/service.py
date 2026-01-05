@@ -269,44 +269,60 @@ def main() -> int:
     logging.basicConfig(level=getattr(logging, log_level, logging.INFO), handlers=handlers, format="%(asctime)s %(levelname)s %(message)s")
 
     status_path = Path(args.status_file)
-    while True:
-        try:
-            if args.source == "csv" and (not args.h4 or not args.h1 or not args.m15):
-                raise ValueError("--h4/--h1/--m15 are required when --source=csv")
+    try:
+        while True:
+            try:
+                if args.source == "csv" and (not args.h4 or not args.h1 or not args.m15):
+                    raise ValueError("--h4/--h1/--m15 are required when --source=csv")
 
-            s = run_once(
-                source=str(args.source),
-                h4_path=str(args.h4),
-                h1_path=str(args.h1),
-                m15_path=str(args.m15),
-                mt5_symbol=str(args.symbol),
-                bars_m15=int(args.bars_m15),
-                bars_h1=int(args.bars_h1),
-                bars_h4=int(args.bars_h4),
-                model_path=str(args.model),
-                out_dir=str(args.out_dir),
-                min_prob=float(args.min_prob),
-                mode=str(args.mode),
-                state_file=str(args.state_file),
-                max_signals_per_day=int(args.max_signals_per_day),
-                max_spread_pips=float(args.max_spread_pips),
-            )
-        except Exception as e:  # noqa: BLE001
-            now_iso = datetime.now(timezone.utc).isoformat()
-            logging.exception("service_run_error")
-            s = ServiceStatus(
-                time_utc=now_iso,
-                session_state="BLOCKED",
-                candidates=0,
-                wrote_signal=False,
-                last_signal_id=None,
-                signals_today=0,
-                spread_pips=None,
-                last_error=str(e),
-            )
+                s = run_once(
+                    source=str(args.source),
+                    h4_path=str(args.h4),
+                    h1_path=str(args.h1),
+                    m15_path=str(args.m15),
+                    mt5_symbol=str(args.symbol),
+                    bars_m15=int(args.bars_m15),
+                    bars_h1=int(args.bars_h1),
+                    bars_h4=int(args.bars_h4),
+                    model_path=str(args.model),
+                    out_dir=str(args.out_dir),
+                    min_prob=float(args.min_prob),
+                    mode=str(args.mode),
+                    state_file=str(args.state_file),
+                    max_signals_per_day=int(args.max_signals_per_day),
+                    max_spread_pips=float(args.max_spread_pips),
+                )
+            except Exception as e:  # noqa: BLE001
+                now_iso = datetime.now(timezone.utc).isoformat()
+                logging.exception("service_run_error")
+                s = ServiceStatus(
+                    time_utc=now_iso,
+                    session_state="BLOCKED",
+                    candidates=0,
+                    wrote_signal=False,
+                    last_signal_id=None,
+                    signals_today=0,
+                    spread_pips=None,
+                    last_error=str(e),
+                )
 
-        _write_status(status_path, s)
-        time_mod.sleep(max(1, int(args.interval_seconds)))
+            _write_status(status_path, s)
+            
+            # UX Improvement: Print status message to console
+            status_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Monitoring... | Session: {s.session_state} | Signals Today: {s.signals_today}"
+            if s.wrote_signal:
+                status_msg += f" | 🔥 SIGNAL SENT: {s.last_signal_id}"
+            elif s.candidates > 0:
+                status_msg += f" | Found {s.candidates} setups (AI filter active)"
+            elif s.last_error:
+                status_msg += f" | ⚠️ ERROR: {s.last_error}"
+            
+            print(status_msg, flush=True)
+
+            time_mod.sleep(max(1, int(args.interval_seconds)))
+    except KeyboardInterrupt:
+        print("\n[INFO] AI Service stopped by user. Happy trading!", flush=True)
+        return 0
 
 
 if __name__ == "__main__":
