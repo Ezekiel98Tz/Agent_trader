@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 SessionState = Literal["PRIMARY", "SECONDARY", "BLOCKED"]
 
-TZ_TANZANIA = ZoneInfo("Africa/Dar_es_Salaam")
+TZ_LONDON = ZoneInfo("Europe/London")
 
 PRIMARY_START = time(15, 30)
 PRIMARY_END = time(20, 30)
@@ -16,11 +16,14 @@ SECONDARY_START = time(11, 30)
 SECONDARY_END = time(14, 30)
 
 
-def get_session_state(time_utc: datetime) -> SessionState:
+def get_session_state(time_utc: datetime, tz: ZoneInfo | None = None) -> SessionState:
     dt = time_utc
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    local = dt.astimezone(TZ_TANZANIA)
+    
+    # Use provided timezone or fallback to London as default for this project
+    target_tz = tz if tz is not None else TZ_LONDON
+    local = dt.astimezone(target_tz)
     t = local.time()
 
     if PRIMARY_START <= t < PRIMARY_END:

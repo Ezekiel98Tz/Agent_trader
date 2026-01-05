@@ -34,7 +34,7 @@ def main() -> int:
     h1 = load_ohlcv_csv(args.h1, schema="generic")
     m15 = load_ohlcv_csv(args.m15, schema="generic")
 
-    candidates = generate_candidates(CandidateInputs(h4=h4, h1=h1, m15=m15), cfg=cfg)
+    candidates = generate_candidates(CandidateInputs(h4=h4, h1=h1, m15=m15), cfg=cfg, training_mode=True)
     feat_rows = build_feature_rows(cfg=cfg, h4=h4, h1=h1, m15=m15, candidates=candidates)
     feat_df = _rows_to_frame(feat_rows)
 
@@ -50,6 +50,16 @@ def main() -> int:
     )
 
     dataset = feat_df.merge(label_df, on="time", how="inner")
+    if len(dataset) < 1:
+        print(f"[ERROR] No training data found. Found {len(dataset)} samples.")
+        print("Tip: Make sure your MT4 chart has more historical bars (press Home key on chart).")
+        return 1
+    
+    if len(dataset) < 10:
+        print(f"[WARNING] Very little training data (Found {len(dataset)} samples).")
+        print("[WARNING] The model will be created so you can start trading, but it won't be very accurate.")
+        print("[WARNING] Please add more history in MT4 later and re-train for better results.")
+
     if args.out_dataset:
         Path(args.out_dataset).parent.mkdir(parents=True, exist_ok=True)
         dataset.to_csv(args.out_dataset, index=False)

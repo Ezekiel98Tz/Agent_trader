@@ -135,8 +135,9 @@ def run_once(
         h1 = load_ohlcv_csv(h1_path, schema="generic")
         m15 = load_ohlcv_csv(m15_path, schema="generic")
 
-    latest_t = pd.to_datetime(m15["time"].iloc[-1]).to_pydatetime()
-    ss = get_session_state(latest_t)
+    m15_times = pd.to_datetime(m15["time"])
+    latest_t = m15_times.iloc[-1].to_pydatetime()
+    ss = get_session_state(latest_t, tz=cfg.timezone)
     now_iso = now.isoformat()
 
     if ss == "BLOCKED":

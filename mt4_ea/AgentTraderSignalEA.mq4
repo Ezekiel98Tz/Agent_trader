@@ -1,24 +1,134 @@
+#property copyright "Copyright 2026, Ezekiel98Tz"
+#property link      "https://github.com/Ezekiel98Tz/Agent_trader"
+#property version   "1.00"
 #property strict
 
-extern bool AutoTrade = false;
-extern bool VisualOnly = true;
-extern string InboxSubdir = "agent_trader\\inbox";
-extern double Lots = 0.10;
-extern int SlippagePoints = 20;
-extern int MagicNumber = 240102;
-extern bool BlockIfAnyOpenPosition = false;
-extern int MaxTradesPerDay = 3;
-extern double MaxDailyLossMoney = 50.0;
-extern double MaxSpreadPips = 2.5;
-extern bool BreakEvenEnabled = true;
-extern double BreakEvenTriggerPips = 10.0;
-extern bool TrailingEnabled = false;
-extern double TrailingPips = 12.0;
-extern int DayCloseHour = 21;
-extern int DayCloseMinute = 30;
+//--- Input Parameters
+input bool   AutoTrade             = false;  // Allow execution of trades?
+input bool   VisualOnly            = true;   // Only show signals in logs, no trades
+input string InboxSubdir           = "agent_trader\\inbox"; // Folder for Python signals
+input double Lots                  = 0.10;   // Base lot size
+input int    SlippagePoints        = 20;     // Max slippage
+input int    MagicNumber           = 240102; // Unique ID for trades
+input bool   BlockIfAnyOpenPosition= false;  // Block if any trade open for this symbol?
+input int    MaxTradesPerDay       = 3;      // Daily trade limit
+input double MaxDailyLossMoney     = 50.0;   // Stop trading if lost this much today
+input double MaxSpreadPips         = 2.5;    // Max spread allowed
+input bool   BreakEvenEnabled      = true;   // Move SL to entry at profit?
+input double BreakEvenTriggerPips  = 10.0;   // Pips profit to trigger BE
+input bool   TrailingEnabled       = false;  // Enable trailing stop?
+input double TrailingPips          = 12.0;   // Trailing distance in pips
+input int    DayCloseHour          = 21;     // Auto-close trades at this hour
+input int    DayCloseMinute        = 30;     // Auto-close trades at this minute
 
+//--- Global Variables
 string g_last_signal_id = "";
 
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   Print("AgentTrader Signal EA Initialized. Symbol: ", Symbol(), " Magic: ", MagicNumber);
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   ApplyManagement();
+   CloseAtCutoff();
+
+   string id, symbol, side, session_state, regime, quality, mode, filename;
+   datetime t_utc;
+   double entry, sl, tp, confluence, prob, risk_mult;
+
+   if(!ReadNextSignal(id, t_utc, symbol, side, entry, sl, tp, confluence, prob, session_state, regime, quality, risk_mult, mode, filename))
+      return;
+
+   if(id == g_last_signal_id)
+   {
+      MarkSignalConsumed(filename);
+      return;
+   }
+   g_last_signal_id = id;
+
+   if(symbol != Symbol())
+   {
+      MarkSignalConsumed(filename);
+      return;
+   }
+
+   if(HasOpenPosition())
+   {
+      MarkSignalConsumed(filename);
+      return;
+   }
+
+   bool do_trade = AutoTrade && !VisualOnly && (mode == "live" || mode == "paper");
+   if(VisualOnly || mode == "visual")
+      do_trade = false;
+
+   Print("AgentTrader signal: session=", session_state, " regime=", regime, " prob=", DoubleToString(prob, 4), " confluence=", DoubleToString(confluence, 2), " quality=", quality, " risk_mult=", DoubleToString(risk_mult, 2), " mode=", mode);
+
+   if(quality == "SKIP" || risk_mult <= 0.0)
+      do_trade = false;
+
+   int trades_today = GetTradesToday();
+   double start_balance = GetStartBalance();
+   double daily_pnl = AccountBalance() - start_balance;
+   double spread_pips = CurrentSpreadPips();
+   
+   if(trades_today >= MaxTradesPerDay) {
+      Print("Signal skipped: Max trades per day reached (", trades_today, ")");
+      do_trade = false;
+   }
+   if(MaxDailyLossMoney > 0.0 && daily_pnl <= -MaxDailyLossMoney) {
+      Print("Signal skipped: Max daily loss reached (", daily_pnl, ")");
+      do_trade = false;
+   }
+   if(MaxSpreadPips > 0.0 && spread_pips > MaxSpreadPips) {
+      Print("Signal skipped: Spread too high (", spread_pips, " > ", MaxSpreadPips, ")");
+      do_trade = false;
+   }
+
+   if(do_trade)
+   {
+      double lots = Lots * risk_mult;
+      if(lots <= 0.0)
+      {
+         MarkSignalConsumed(filename);
+         return;
+      }
+
+      int cmd = (side == "buy") ? OP_BUY : OP_SELL;
+      double price = (cmd == OP_BUY) ? Ask : Bid;
+      double sl_n = NormalizeDouble(sl, Digits);
+      double tp_n = NormalizeDouble(tp, Digits);
+      
+      if(StopsValid(cmd == OP_BUY, sl_n, tp_n))
+      {
+         int ticket = OrderSend(Symbol(), cmd, lots, price, SlippagePoints, sl_n, tp_n, "AgentTrader", MagicNumber, 0, (cmd == OP_BUY ? clrBlue : clrRed));
+         if(ticket < 0)
+            Print("OrderSend failed: ", GetLastError());
+         else {
+            Print("Order opened successfully. Ticket: ", ticket);
+            IncTradesToday();
+         }
+      }
+      else {
+         Print("Invalid Stops for order: SL=", sl_n, " TP=", tp_n, " Price=", price);
+      }
+   }
+
+   MarkSignalConsumed(filename);
+}
+
+//+------------------------------------------------------------------+
+//| Helper Functions                                                 |
+//+------------------------------------------------------------------+
 double PipValue()
 {
    string s = Symbol();
@@ -112,14 +222,14 @@ bool StopsValid(const bool buy, const double sl, const double tp)
 bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, double &entry, double &sl, double &tp, double &confluence, double &prob, string &session_state, string &regime, string &quality, double &risk_mult, string &mode, string &filename_out)
 {
    string subdir = InboxSubdir;
-   int handle = FileFindFirst(subdir + "\\signal_*.csv", filename_out, FILE_COMMON);
+   long handle = FileFindFirst(subdir + "\\signal_*.csv", filename_out, FILE_COMMON);
    if(handle == INVALID_HANDLE)
       return false;
 
    bool found = false;
    while(true)
    {
-      if(filename_out == "" || FileIsExist(subdir + "\\" + filename_out, FILE_COMMON) == false)
+      if(filename_out == "" || !FileIsExist(subdir + "\\" + filename_out, FILE_COMMON))
       {
          if(!FileFindNext(handle, filename_out))
             break;
@@ -138,7 +248,8 @@ bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, d
       FileClose(fh);
 
       string parts[];
-      int n = StringSplit(line, ',', parts);
+      ushort sep = StringGetCharacter(",", 0);
+      int n = StringSplit(line, sep, parts);
       if(n < 14)
       {
          if(!FileFindNext(handle, filename_out))
@@ -147,18 +258,18 @@ bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, d
       }
 
       id = parts[0];
-      t_utc = StringToTime(parts[1]);
+      t_utc = (datetime)StringToTime(parts[1]);
       symbol = parts[2];
       side = parts[3];
-      entry = StrToDouble(parts[4]);
-      sl = StrToDouble(parts[5]);
-      tp = StrToDouble(parts[6]);
-      confluence = StrToDouble(parts[7]);
-      prob = StrToDouble(parts[8]);
+      entry = StringToDouble(parts[4]);
+      sl = StringToDouble(parts[5]);
+      tp = StringToDouble(parts[6]);
+      confluence = StringToDouble(parts[7]);
+      prob = StringToDouble(parts[8]);
       session_state = parts[9];
       regime = parts[10];
       quality = parts[11];
-      risk_mult = StrToDouble(parts[12]);
+      risk_mult = StringToDouble(parts[12]);
       mode = parts[13];
       found = true;
       break;
@@ -174,7 +285,7 @@ void MarkSignalConsumed(const string filename)
    string src = subdir + "\\" + filename;
    string dst = subdir + "\\consumed_" + filename;
    if(FileIsExist(src, FILE_COMMON))
-      FileMove(src, dst, FILE_COMMON);
+      FileMove(src, FILE_COMMON, dst, FILE_REWRITE);
 }
 
 bool HasOpenPosition()
@@ -283,82 +394,4 @@ void CloseAtCutoff()
       if(!ok)
          Print("OrderClose failed: ", GetLastError());
    }
-}
-
-int start()
-{
-   ApplyManagement();
-   CloseAtCutoff();
-
-   string id, symbol, side, session_state, regime, quality, mode, filename;
-   datetime t_utc;
-   double entry, sl, tp, confluence, prob, risk_mult;
-
-   if(!ReadNextSignal(id, t_utc, symbol, side, entry, sl, tp, confluence, prob, session_state, regime, quality, risk_mult, mode, filename))
-      return 0;
-
-   if(id == g_last_signal_id)
-   {
-      MarkSignalConsumed(filename);
-      return 0;
-   }
-   g_last_signal_id = id;
-
-   if(symbol != Symbol())
-   {
-      MarkSignalConsumed(filename);
-      return 0;
-   }
-
-   if(HasOpenPosition())
-   {
-      MarkSignalConsumed(filename);
-      return 0;
-   }
-
-   bool do_trade = AutoTrade && !VisualOnly && (mode == "live" || mode == "paper");
-   if(VisualOnly || mode == "visual")
-      do_trade = false;
-
-   Print("AgentTrader signal: session=", session_state, " regime=", regime, " prob=", DoubleToString(prob, 4), " confluence=", DoubleToString(confluence, 2), " quality=", quality, " risk_mult=", DoubleToString(risk_mult, 2), " mode=", mode);
-
-   if(quality == "SKIP" || risk_mult <= 0.0)
-      do_trade = false;
-
-   int trades_today = GetTradesToday();
-   double start_balance = GetStartBalance();
-   double daily_pnl = AccountBalance() - start_balance;
-   double spread_pips = CurrentSpreadPips();
-   if(trades_today >= MaxTradesPerDay)
-      do_trade = false;
-   if(MaxDailyLossMoney > 0.0 && daily_pnl <= -MaxDailyLossMoney)
-      do_trade = false;
-   if(MaxSpreadPips > 0.0 && spread_pips > MaxSpreadPips)
-      do_trade = false;
-
-   if(do_trade)
-   {
-      double lots = Lots * risk_mult;
-      if(lots <= 0.0)
-      {
-         MarkSignalConsumed(filename);
-         return 0;
-      }
-
-      int cmd = (side == "buy") ? OP_BUY : OP_SELL;
-      double price = (cmd == OP_BUY) ? Ask : Bid;
-      double sl_n = NormalizeDouble(sl, Digits);
-      double tp_n = NormalizeDouble(tp, Digits);
-      if(StopsValid(cmd == OP_BUY, sl_n, tp_n))
-      {
-         int ticket = OrderSend(Symbol(), cmd, lots, price, SlippagePoints, sl_n, tp_n, "AgentTrader", MagicNumber, 0, clrNONE);
-         if(ticket < 0)
-            Print("OrderSend failed: ", GetLastError());
-         else
-            IncTradesToday();
-      }
-   }
-
-   MarkSignalConsumed(filename);
-   return 0;
 }

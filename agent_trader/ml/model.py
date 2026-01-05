@@ -61,18 +61,34 @@ def train_probability_model(
     num_cols = [c for c in X.columns if c not in cat_cols]
     raw_pipe = _make_pipeline(cat_cols, num_cols)
 
-    tscv = TimeSeriesSplit(n_splits=5)
-    oof = np.zeros(len(X), dtype=float)
-    for train_idx, test_idx in tscv.split(X):
-        pipe_fold = _make_pipeline(cat_cols, num_cols)
-        pipe_fold.fit(X.iloc[train_idx], y.iloc[train_idx])
-        oof[test_idx] = pipe_fold.predict_proba(X.iloc[test_idx])[:, 1]
+    # Dynamically adjust splits based on data size
+    n_samples = len(X)
+    n_splits = min(5, n_samples - 1) if n_samples > 1 else 0
+    
+    if n_splits >= 2:
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+        oof = np.zeros(len(X), dtype=float)
+        for train_idx, test_idx in tscv.split(X):
+            pipe_fold = _make_pipeline(cat_cols, num_cols)
+            y_fold = y.iloc[train_idx]
+            pipe_fold.fit(X.iloc[train_idx], y_fold)
+            
+            # Handle case where fold only has one class
+            p = pipe_fold.predict_proba(X.iloc[test_idx])
+            if p.shape[1] == 2:
+                oof[test_idx] = p[:, 1]
+            else:
+                # If only one class seen, predict 1.0 if it was the positive class, else 0.0
+                val = 1.0 if y_fold.iloc[0] == 1 else 0.0
+                oof[test_idx] = val
 
-    metrics = {
-        "roc_auc_oof": float(roc_auc_score(y, oof)) if len(np.unique(y)) > 1 else float("nan"),
-        "brier_oof": float(brier_score_loss(y, oof)),
-        "report_oof": classification_report(y, (oof >= 0.5).astype(int), output_dict=True),
-    }
+        metrics = {
+            "roc_auc_oof": float(roc_auc_score(y, oof)) if len(np.unique(y)) > 1 else float("nan"),
+            "brier_oof": float(brier_score_loss(y, oof)),
+            "report_oof": classification_report(y, (oof >= 0.5).astype(int), output_dict=True),
+        }
+    else:
+        metrics = {"info": "Too few samples for cross-validation metrics"}
 
     n = len(X)
     calib_n = int(max(0, min(n, round(n * calibration_fraction))))
@@ -82,26 +98,24 @@ def train_probability_model(
     raw_pipe_full.fit(X, y)
 
     if calib_n >= 50 and train_n >= 200 and calibration in ("sigmoid", "isotonic"):
-        X_train = X.iloc[:train_n]
-        y_train = y.iloc[:train_n]
-        X_cal = X.iloc[train_n:]
-        y_cal = y.iloc[train_n:]
-        raw_pipe_train = _make_pipeline(cat_cols, num_cols)
-        raw_pipe_train.fit(X_train, y_train)
-        cal = CalibratedClassifierCV(raw_pipe_train, method=calibration, cv="prefit")
-        cal.fit(X_cal, y_cal)
-        p_raw = raw_pipe_train.predict_proba(X_cal)[:, 1]
-        p_cal = cal.predict_proba(X_cal)[:, 1]
-        metrics.update(
-            {
-                "calibration_method": calibration,
-                "brier_calibration_raw": float(brier_score_loss(y_cal, p_raw)),
-                "brier_calibration_calibrated": float(brier_score_loss(y_cal, p_cal)),
-                "calibration_samples": int(calib_n),
-            }
-        )
-        calibrated_model: CalibratedClassifierCV | None = cal
-        final_method = calibration
+        try:
+            # Use cross-validated calibration (cv=5) instead of 'prefit'
+            # This is more robust across sklearn versions and generally better for datasets of this size
+            cal = CalibratedClassifierCV(_make_pipeline(cat_cols, num_cols), method=calibration, cv=5)
+            cal.fit(X, y)
+            
+            metrics.update(
+                {
+                    "calibration_method": calibration,
+                    "calibration_samples": int(n),
+                }
+            )
+            calibrated_model: CalibratedClassifierCV | None = cal
+            final_method = calibration
+        except Exception:
+            calibrated_model = None
+            final_method = "none"
+            metrics.update({"calibration_method": "none"})
     else:
         calibrated_model = None
         final_method = "none"
@@ -122,11 +136,21 @@ def predict_proba_raw(artifacts: ModelArtifacts, df_features: pd.DataFrame) -> n
     return artifacts.raw_pipeline.predict_proba(X)[:, 1]
 
 
-def predict_proba(artifacts: ModelArtifacts, df_features: pd.DataFrame) -> np.ndarray:
+def predict_proba(artifacts: ModelArtifacts, df_features: pd.DataFrame) -> list[float]:
     X = df_features[artifacts.feature_columns]
-    if artifacts.calibrated_model is None:
-        return artifacts.raw_pipeline.predict_proba(X)[:, 1]
-    return artifacts.calibrated_model.predict_proba(X)[:, 1]
+    if artifacts.calibrated_model:
+        probs = artifacts.calibrated_model.predict_proba(X)
+    else:
+        probs = artifacts.raw_pipeline.predict_proba(X)
+    
+    # Handle case where model was trained on only one class
+    if probs.shape[1] == 1:
+        # If the only class known is the positive class, return 1.0s, else 0.0s
+        # Note: artifacts.raw_pipeline.classes_[0] would be the class value
+        val = 1.0 if artifacts.raw_pipeline.classes_[0] == 1 else 0.0
+        return [val] * len(X)
+        
+    return probs[:, 1].tolist()
 
 
 def save_model(artifacts: ModelArtifacts, path: str) -> None:

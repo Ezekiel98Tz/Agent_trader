@@ -23,12 +23,12 @@ class CandidateInputs:
     m15: pd.DataFrame
 
 
-def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate: bool = False) -> list[TradeCandidate]:
+def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate: bool = False, training_mode: bool = False) -> list[TradeCandidate]:
     m15 = data.m15.reset_index(drop=True)
-    m15_times = pd.to_datetime(m15["time"]).to_numpy()
+    m15_times = pd.to_datetime(m15["time"])
     if live_gate and len(m15_times):
-        latest_t = pd.to_datetime(m15_times[-1]).to_pydatetime()
-        if get_session_state(latest_t) == "BLOCKED":
+        latest_t = m15_times.iloc[-1].to_pydatetime()
+        if get_session_state(latest_t, tz=cfg.timezone) == "BLOCKED":
             return []
 
     h4_ctx = compute_trend_context(data.h4)
@@ -37,28 +37,36 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
     atr_pct = rolling_percentile(atr14, window=250)
     fvgs = detect_fvgs_m15(m15, min_gap=0.0)
 
-    h4_times = pd.to_datetime(data.h4["time"]).to_numpy()
-    h1_times = pd.to_datetime(data.h1["time"]).to_numpy()
+    h4_times = pd.to_datetime(data.h4["time"])
+    h1_times = pd.to_datetime(data.h1["time"])
 
     last_sr_h1_idx = -1
     sr = compute_sr_context(data.h1, end_time=None)
 
     out: list[TradeCandidate] = []
     for i in range(210, len(m15)):
-        t = pd.to_datetime(m15_times[i]).to_pydatetime()
-        session_state = get_session_state(t)
-        if session_state == "BLOCKED":
-            continue
-        if not within_day_cutoff(t, cfg.timezone, cfg.day_end_cutoff):
-            continue
-        session, overlap = infer_session(t, cfg.timezone)
-        if session == "OffHours":
-            continue
+        t = m15_times.iloc[i].to_pydatetime()
+        
+        # Default session values for training mode
+        session = "London"
+        overlap = True
+        session_state = "PRIMARY"
+
+        # During training, we ignore session filters to maximize data samples.
+        # This helps the AI learn patterns even if they happen outside London hours.
+        if not training_mode:
+            session_state = get_session_state(t, tz=cfg.timezone)
+            if session_state == "BLOCKED":
+                continue
+            if not within_day_cutoff(t, cfg.timezone, cfg.day_end_cutoff):
+                continue
+            session, overlap = infer_session(t, cfg.timezone)
+            if session == "OffHours":
+                continue
 
         close = float(m15.loc[i, "close"])
-        t64 = pd.to_datetime(t).to_datetime64()
-        h4_idx = int(h4_times.searchsorted(t64, side="right") - 1)
-        h1_idx = int(h1_times.searchsorted(t64, side="right") - 1)
+        h4_idx = int(h4_times.searchsorted(t, side="right") - 1)
+        h1_idx = int(h1_times.searchsorted(t, side="right") - 1)
         if h4_idx < 0 or h1_idx < 0:
             continue
 
@@ -73,7 +81,7 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
 
         if h1_idx != last_sr_h1_idx:
             last_sr_h1_idx = h1_idx
-            sr = compute_sr_context(data.h1, end_time=pd.to_datetime(h1_times[h1_idx]).to_pydatetime())
+            sr = compute_sr_context(data.h1, end_time=h1_times.iloc[h1_idx].to_pydatetime())
 
         prev = m15.loc[i - 1]
         cur = m15.loc[i]
@@ -87,22 +95,37 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
         a14 = float(atr14.iloc[i]) if pd.notna(atr14.iloc[i]) else None
 
         if regime == "TREND":
-            if h4_dir != h1_dir or h1_dir == "range":
-                continue
+            if not training_mode:
+                if h4_dir != h1_dir or h1_dir == "range":
+                    continue
+            
+            # During training, we accept any trend direction to see more examples
             side = Side.BUY if h1_dir == "up" else Side.SELL
+            if training_mode and h1_dir == "range":
+                side = Side.BUY # Default to BUY for training on range data
+                
             engulf = is_bullish_engulfing(prev, cur) if side == Side.BUY else is_bearish_engulfing(prev, cur)
             candle_ok = engulf or (pin_ok and ((pin_side == "bull" and side == Side.BUY) or (pin_side == "bear" and side == Side.SELL)))
-            if not candle_ok:
+            
+            if not candle_ok and not training_mode:
                 continue
+            
+            # If still not candle_ok in training, we force a side to learn from it anyway
+            if not candle_ok and training_mode:
+                side = Side.BUY if cur["close"] > cur["open"] else Side.SELL
+
             fvg_match = latest_relevant_fvg(m15, fvgs, idx=i, side=side, max_age_bars=96)
-            if fvg_match is None:
+            if fvg_match is None and not training_mode:
                 continue
+            
             if a14 is None:
                 continue
-            if side == Side.BUY and (d_sup is None or d_sup > (a14 * 1.5)):
-                continue
-            if side == Side.SELL and (d_res is None or d_res > (a14 * 1.5)):
-                continue
+            
+            if not training_mode:
+                if side == Side.BUY and (d_sup is None or d_sup > (a14 * 1.5)):
+                    continue
+                if side == Side.SELL and (d_res is None or d_res > (a14 * 1.5)):
+                    continue
             sl = close - pips_to_price(cfg.symbol, cfg.risk_sl_pips) if side == Side.BUY else close + pips_to_price(cfg.symbol, cfg.risk_sl_pips)
             if side == Side.BUY:
                 tp_anchor = close + (d_res if d_res is not None else (a14 * 2.0))
@@ -110,35 +133,43 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
                 tp_anchor = close - (d_sup if d_sup is not None else (a14 * 2.0))
             tp = float(tp_anchor)
             rr = abs(tp - close) / abs(close - sl) if abs(close - sl) > 0 else 0.0
-            if rr < cfg.min_rr:
+            if rr < cfg.min_rr and not training_mode:
                 continue
             confluence = 0.0
             confluence += 1.0
-            confluence += 1.0 if fvg_match.inside else 0.5
+            confluence += 1.0 if (fvg_match and fvg_match.inside) else 0.5
             confluence += 0.5 if overlap else 0.0
             confluence += 0.5 if engulf else 0.0
             confluence += 0.25 if cstats.body > a14 * 0.25 else 0.0
             confluence += 0.25 if atr_p is not None and atr_p >= 0.6 else 0.0
             reason = "trend+sr+fvg+candle"
             setup_type = "trend_follow"
-            fvg_size = price_to_pips(cfg.symbol, fvg_match.fvg.size)
-            time_since_fvg = fvg_match.age_bars
-            fvg_inside = fvg_match.inside
+            fvg_size = price_to_pips(cfg.symbol, fvg_match.fvg.size) if fvg_match else 0.0
+            time_since_fvg = fvg_match.age_bars if fvg_match else 0
+            fvg_inside = fvg_match.inside if fvg_match else False
         else:
             if a14 is None:
                 continue
             near_support = d_sup is not None and d_sup <= (a14 * 1.0)
             near_res = d_res is not None and d_res <= (a14 * 1.0)
-            if not (near_support or near_res):
+            
+            if not (near_support or near_res) and not training_mode:
                 continue
+            
             if near_support and (not near_res or (d_sup is not None and d_res is not None and d_sup <= d_res)):
                 side = Side.BUY
             else:
                 side = Side.SELL
             engulf = is_bullish_engulfing(prev, cur) if side == Side.BUY else is_bearish_engulfing(prev, cur)
             candle_ok = engulf or (pin_ok and ((pin_side == "bull" and side == Side.BUY) or (pin_side == "bear" and side == Side.SELL)))
-            if not candle_ok:
+            
+            if not candle_ok and not training_mode:
                 continue
+            
+            # Force side for training if no clear candle setup
+            if not candle_ok and training_mode:
+                side = Side.BUY if cur["close"] > cur["open"] else Side.SELL
+
             fvg_match = latest_relevant_fvg(m15, fvgs, idx=i, side=side, max_age_bars=96)
             sl = close - pips_to_price(cfg.symbol, cfg.risk_sl_pips) if side == Side.BUY else close + pips_to_price(cfg.symbol, cfg.risk_sl_pips)
             if side == Side.BUY:
@@ -147,7 +178,8 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
                 tp_anchor = (n_sup[0].price if n_sup is not None else (close - a14 * 2.0))
             tp = float(tp_anchor)
             rr = abs(tp - close) / abs(close - sl) if abs(close - sl) > 0 else 0.0
-            if rr < cfg.min_rr:
+            
+            if rr < cfg.min_rr and not training_mode:
                 continue
             confluence = 0.0
             confluence += 1.0

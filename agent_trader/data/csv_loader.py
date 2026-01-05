@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import pandas as pd
+import time
 
 
 def load_ohlcv_csv(
@@ -14,7 +15,17 @@ def load_ohlcv_csv(
     schema: Literal["mt5", "generic"] = "generic",
 ) -> pd.DataFrame:
     p = Path(path)
-    df = pd.read_csv(p)
+    # Add retry logic for locked files (common in MT4/MT5)
+    retries = 3
+    while retries > 0:
+        try:
+            df = pd.read_csv(p)
+            break
+        except (PermissionError, pd.errors.EmptyDataError):
+            retries -= 1
+            if retries == 0:
+                raise
+            time.sleep(0.5)
     if time_col not in df.columns:
         raise ValueError(f"Missing '{time_col}' column in {p}")
     df[time_col] = pd.to_datetime(df[time_col], utc=True, errors="raise")

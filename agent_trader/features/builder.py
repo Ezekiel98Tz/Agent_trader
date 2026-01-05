@@ -29,8 +29,8 @@ def build_feature_rows(
     m15 = m15.reset_index(drop=True)
     time_index = pd.to_datetime(m15["time"])
     idx_by_time = {t.to_pydatetime(): i for i, t in enumerate(time_index)}
-    h4_times = pd.to_datetime(h4["time"]).to_numpy()
-    h1_times = pd.to_datetime(h1["time"]).to_numpy()
+    h4_times = pd.to_datetime(h4["time"])
+    h1_times = pd.to_datetime(h1["time"])
 
     rows: list[FeatureRow] = []
     for c in candidates:
@@ -40,9 +40,11 @@ def build_feature_rows(
         row = m15.loc[i]
         prev = m15.loc[i - 1]
         session, overlap = infer_session(c.time, cfg.timezone)
-        t64 = pd.to_datetime(c.time).to_datetime64()
-        h4_idx = int(h4_times.searchsorted(t64, side="right") - 1)
-        h1_idx = int(h1_times.searchsorted(t64, side="right") - 1)
+        
+        # Preserve timezone awareness for comparison
+        t_compare = pd.to_datetime(c.time)
+        h4_idx = int(h4_times.searchsorted(t_compare, side="right") - 1)
+        h1_idx = int(h1_times.searchsorted(t_compare, side="right") - 1)
         if h4_idx < 0 or h1_idx < 0:
             continue
         sl_pips = price_to_pips(cfg.symbol, abs(c.entry_price - c.sl_price))
