@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import time as time_mod
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -91,7 +91,9 @@ def run_once(
     max_signals_per_day: int,
     max_spread_pips: float,
 ) -> ServiceStatus:
-    cfg = DEFAULT_CONFIG
+    # Update config with the actual symbol being traded
+    cfg = replace(DEFAULT_CONFIG, symbol=mt5_symbol)
+    
     now = datetime.now(timezone.utc)
     state_path = Path(state_file)
     state = _read_state(state_path, now)
@@ -312,9 +314,12 @@ def main() -> int:
             status_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Monitoring... | Session: {s.session_state} | Signals Today: {s.signals_today}"
             if s.wrote_signal:
                 status_msg += f" | 🔥 SIGNAL SENT: {s.last_signal_id}"
-            elif s.candidates > 0:
-                status_msg += f" | Setups Found: {s.candidates} (AI filter active)"
-            elif s.last_error:
+            else:
+                status_msg += f" | Setups Found: {s.candidates}"
+                if s.candidates > 0:
+                    status_msg += " (AI filter active)"
+            
+            if s.last_error:
                 status_msg += f" | ⚠️ ERROR: {s.last_error}"
             
             print(status_msg, flush=True)

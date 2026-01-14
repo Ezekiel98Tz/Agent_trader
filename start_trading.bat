@@ -2,31 +2,31 @@
 setlocal enabledelayedexpansion
 
 :: 1. Symbol Configuration
-set SYMBOL=%~1
+set "SYMBOL=%~1"
 if "%SYMBOL%"=="" (
-    set /p SYMBOL="Enter Symbol to trade (e.g., GBPUSD, USDCAD): "
+    set /p "SYMBOL=Enter Symbol to trade (e.g., GBPUSD, USDCAD): "
 )
 :: Remove any spaces from the input
-if defined SYMBOL set SYMBOL=%SYMBOL: =%
-if "%SYMBOL%"=="" set SYMBOL=GBPUSD
+if defined SYMBOL set "SYMBOL=%SYMBOL: =%"
+if "%SYMBOL%"=="" set "SYMBOL=GBPUSD"
 
 :: 2. Paths
-set MT4_DATA=%APPDATA%\MetaQuotes\Terminal\Common\Files\agent_trader
-set DATA_DIR=%MT4_DATA%
-set SIGNALS_DIR=%MT4_DATA%\signals
-set MODEL=models/%SYMBOL%_model.joblib
+set "MT4_DATA=%APPDATA%\MetaQuotes\Terminal\Common\Files\agent_trader"
+set "DATA_DIR=%MT4_DATA%"
+set "SIGNALS_DIR=%MT4_DATA%\signals"
+set "MODEL=models\%SYMBOL%_model.joblib"
 
 echo ===================================================
 echo   AgentTrader AI - Trading Service [%SYMBOL%]
 echo ===================================================
 
 :: Detect actual filename (handling suffixes like USDCADb)
-set ACTUAL_SYMBOL=
-if exist "%DATA_DIR%\data\%SYMBOL%*_M15.csv" set DATA_DIR=%MT4_DATA%\data
+set "ACTUAL_SYMBOL="
+if exist "%DATA_DIR%\data\%SYMBOL%*_M15.csv" set "DATA_DIR=%MT4_DATA%\data"
 
 for /f "delims=" %%F in ('dir /b "%DATA_DIR%\%SYMBOL%*_M15.csv" 2^>nul') do (
-    set FILENAME=%%F
-    set ACTUAL_SYMBOL=!FILENAME:_M15.csv=!
+    set "FILENAME=%%F"
+    set "ACTUAL_SYMBOL=!FILENAME:_M15.csv=!"
     goto :found
 )
 
@@ -42,20 +42,20 @@ if "%ACTUAL_SYMBOL%"=="" (
 if not exist "%MODEL%" (
     echo [WARNING] AI Model for %SYMBOL% not found at %MODEL%
     echo.
-    set /p TRAIN_NOW="Would you like to train it now? (y/n): "
+    set /p "TRAIN_NOW=Would you like to train it now? (y/n): "
     if /i "!TRAIN_NOW!"=="y" (
-        call train_initial.bat %SYMBOL%
+        call train_initial.bat "%SYMBOL%"
         if %errorlevel% neq 0 (
             echo [ERROR] Training failed or was cancelled.
             pause
             exit /b 1
         )
         :: Refresh data dir and actual symbol after training
-        set DATA_DIR=%MT4_DATA%
-        if exist "%DATA_DIR%\data\%SYMBOL%*_M15.csv" set DATA_DIR=%MT4_DATA%\data
+        set "DATA_DIR=%MT4_DATA%"
+        if exist "%DATA_DIR%\data\%SYMBOL%*_M15.csv" set "DATA_DIR=%MT4_DATA%\data"
         for /f "delims=" %%F in ('dir /b "!DATA_DIR!\%SYMBOL%*_M15.csv" 2^>nul') do (
-            set FILENAME=%%F
-            set ACTUAL_SYMBOL=!FILENAME:_M15.csv=!
+            set "FILENAME=%%F"
+            set "ACTUAL_SYMBOL=!FILENAME:_M15.csv=!"
         )
     ) else (
         echo [ERROR] Cannot start trading without an AI model.
@@ -71,7 +71,7 @@ python -m agent_trader.runtime.service ^
   --h4  "%DATA_DIR%\%ACTUAL_SYMBOL%_H4.csv" ^
   --h1  "%DATA_DIR%\%ACTUAL_SYMBOL%_H1.csv" ^
   --m15 "%DATA_DIR%\%ACTUAL_SYMBOL%_M15.csv" ^
-  --symbol "%SYMBOL%" ^
+  --symbol "%ACTUAL_SYMBOL%" ^
   --model "%MODEL%" ^
   --out-dir "%SIGNALS_DIR%" ^
   --min-prob 0.60 ^

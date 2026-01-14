@@ -32,7 +32,8 @@ def get_session_state(
     s_start, s_end = cfg.secondary_start, cfg.secondary_end
 
     # USDCAD Specifics: New York Open is more important
-    if "CAD" in symbol.upper() or "USD" in symbol.upper():
+    # We check for CAD specifically to avoid matching GBPUSD
+    if "CAD" in symbol.upper():
         p_start = cfg.usd_cad_primary_start
         s_start = cfg.usd_cad_secondary_start
         s_end = cfg.usd_cad_secondary_end
