@@ -313,7 +313,7 @@ def main() -> int:
             if s.wrote_signal:
                 status_msg += f" | 🔥 SIGNAL SENT: {s.last_signal_id}"
             elif s.candidates > 0:
-                status_msg += f" | Found {s.candidates} setups (AI filter active)"
+                status_msg += f" | Setups Found: {s.candidates} (AI filter active)"
             elif s.last_error:
                 status_msg += f" | ⚠️ ERROR: {s.last_error}"
             
