@@ -122,11 +122,11 @@ def simulate_trades(
         if bt.enforce_cutoff and not within_day_cutoff(entry_time, cfg.timezone, cutoff_t):
             continue
         if bt.enforce_session:
-            ss = get_session_state(entry_time)
+            ss = get_session_state(entry_time, symbol=cfg.symbol, cfg=cfg)
             if ss == "BLOCKED":
                 continue
         else:
-            ss = get_session_state(entry_time)
+            ss = get_session_state(entry_time, symbol=cfg.symbol, cfg=cfg)
 
         if str(c.meta.get("quality", "")) == "SKIP":
             continue

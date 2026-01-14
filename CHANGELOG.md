@@ -1,3 +1,31 @@
+# Changelog - 2026-01-14
+
+## Summary
+Today's updates focused on multi-pair optimization (USDCAD), symbol-aware session rules, and a complete overhaul of the automation scripts to improve user experience and handle broker-specific symbol suffixes.
+
+## [Added]
+- **Symbol-Aware Sessions**: Implemented pair-specific session windows in [session_filter.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/session/session_filter.py). 
+  - **USDCAD**: Now optimized for the New York Open (Primary session starts at 13:00 London / 16:00 Tanzania).
+  - **GBPUSD**: Preserved London-centric trading hours.
+- **Tanzania Time Documentation**: Provided a full breakdown of trading sessions in Tanzania East Africa Time (EAT) for both GBPUSD and USDCAD.
+
+## [Fixed]
+- **Broker Suffix Support**: Updated [train_initial.bat](file:///c:/Users/hp/Documents/trae_projects/agent_trader/train_initial.bat) and [start_trading.bat](file:///c:/Users/hp/Documents/trae_projects/agent_trader/start_trading.bat) to automatically detect and handle broker-specific symbols like `USDCADb` or `GBPUSDb`.
+- **Path Robustness**: Resolved crashes in batch scripts caused by spaces in Windows user paths or folder names by implementing quoted path handling.
+- **Terminal UX**: Fixed the "disappearing window" issue by adding mandatory pauses and persistent error reporting in all automation scripts.
+
+## [Improved]
+- **Automation Scripts**: Completely redesigned `train_initial.bat` to be "crash-proof," with better file verification and clear status updates.
+- **Multi-Pair Training**: Enhanced the training pipeline to save and load pair-specific models (e.g., `models/USDCAD_model.joblib`), allowing the bot to trade multiple pairs simultaneously in different windows.
+- **Risk Management Visibility**: Clarified fixed risk parameters (17.5 pip SL, 1.0% risk) in the configuration.
+
+## [Metrics - USDCAD]
+- **Model Accuracy (ROC AUC)**: 0.61 (Solid predictive edge for USDCAD)
+- **Training Samples**: 413 labeled setups processed.
+- **Calibration**: Sigmoid calibration successfully applied.
+
+---
+
 # Changelog - 2026-01-05
 
 ## Summary

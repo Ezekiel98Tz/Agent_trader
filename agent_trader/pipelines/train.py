@@ -24,12 +24,17 @@ def main() -> int:
     ap.add_argument("--h4", required=True)
     ap.add_argument("--h1", required=True)
     ap.add_argument("--m15", required=True)
+    ap.add_argument("--symbol", default="GBPUSD")
     ap.add_argument("--out-model", required=True)
     ap.add_argument("--out-dataset", required=False)
     ap.add_argument("--calibration", choices=["none", "sigmoid", "isotonic"], default="sigmoid")
     args = ap.parse_args()
 
     cfg = DEFAULT_CONFIG
+    if args.symbol != cfg.symbol:
+        from dataclasses import replace
+        cfg = replace(cfg, symbol=args.symbol)
+    
     h4 = load_ohlcv_csv(args.h4, schema="generic")
     h1 = load_ohlcv_csv(args.h1, schema="generic")
     m15 = load_ohlcv_csv(args.m15, schema="generic")

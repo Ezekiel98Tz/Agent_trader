@@ -55,7 +55,7 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
         # During training, we ignore session filters to maximize data samples.
         # This helps the AI learn patterns even if they happen outside London hours.
         if not training_mode:
-            session_state = get_session_state(t, tz=cfg.timezone)
+            session_state = get_session_state(t, tz=cfg.timezone, symbol=cfg.symbol, cfg=cfg)
             if session_state == "BLOCKED":
                 continue
             if not within_day_cutoff(t, cfg.timezone, cfg.day_end_cutoff):

@@ -137,7 +137,7 @@ def run_once(
 
     m15_times = pd.to_datetime(m15["time"])
     latest_t = m15_times.iloc[-1].to_pydatetime()
-    ss = get_session_state(latest_t, tz=cfg.timezone)
+    ss = get_session_state(latest_t, tz=cfg.timezone, symbol=cfg.symbol, cfg=cfg)
     now_iso = now.isoformat()
 
     if ss == "BLOCKED":
