@@ -10,12 +10,13 @@ Today's updates focused on multi-pair optimization (USDCAD), symbol-aware sessio
 - **Tanzania Time Documentation**: Provided a full breakdown of trading sessions in Tanzania East Africa Time (EAT) for both GBPUSD and USDCAD.
 
 ## [Fixed]
-- **Broker Suffix Support**: Updated [train_initial.bat](file:///c:/Users/hp/Documents/trae_projects/agent_trader/train_initial.bat) and [start_trading.bat](file:///c:/Users/hp/Documents/trae_projects/agent_trader/start_trading.bat) to automatically detect and handle broker-specific symbols like `USDCADb` or `GBPUSDb`.
-- **Path Robustness**: Resolved crashes in batch scripts caused by spaces in Windows user paths or folder names by implementing quoted path handling.
-- **Terminal UX**: Fixed the "disappearing window" issue by adding mandatory pauses and persistent error reporting in all automation scripts.
+- **Terminal Closure Resolution**: Implemented robust variable quoting and path handling in `start_trading.bat` and `train_initial.bat` to prevent crashes caused by special characters or spaces in Windows paths.
+- **USDCAD Session Separation**: Fixed a logic bug in [session_filter.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/session/session_filter.py) where USDCAD was accidentally sharing GBPUSD rules. Each pair now follows its unique market hours.
+- **Monitoring Visibility**: Updated [service.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/runtime/service.py) to always display the "Setups Found" count, even if it is 0. This ensures the user knows the bot is actively scanning.
 
 ## [Improved]
-- **Automation Scripts**: Completely redesigned `train_initial.bat` to be "crash-proof," with better file verification and clear status updates.
+- **Real-Time Heartbeat Logs**: Enhanced the console output to show `Setups Found: X (AI filter active)` when setups are detected but filtered by AI, providing full transparency into the AI's decision-making process.
+- **Symbol Configuration**: The trading service now dynamically updates its internal configuration to match the specific symbol being traded (e.g., applying CAD-specific logic automatically when USDCAD is selected).
 - **Multi-Pair Training**: Enhanced the training pipeline to save and load pair-specific models (e.g., `models/USDCAD_model.joblib`), allowing the bot to trade multiple pairs simultaneously in different windows.
 - **Risk Management Visibility**: Clarified fixed risk parameters (17.5 pip SL, 1.0% risk) in the configuration.
 
