@@ -1,3 +1,24 @@
+# Changelog - 2026-01-21
+
+## Summary
+Today's updates addressed the "strict session rules" concern by implementing a smarter, volatility-aware trade quality logic. The system now adapts to market conditions (ATR) rather than relying solely on rigid clock hours.
+
+## [Added]
+- **Volatility-Aware Trade Quality**: Implemented "Market Activity Override" in [quality.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/policy/quality.py). 
+  - If market volatility is high (ATR in the top 30% of recent history), the bot is now smarter and allows `AVERAGE` quality trades even in `SECONDARY` sessions.
+  - This ensures we capture big moves regardless of the exact time, provided the market is "active".
+
+## [Improved]
+- **Loosened Entry Requirements**:
+  - Lowered the minimum `confluence_score` for `AVERAGE` trades from `3.0` to `2.5`. This allows more valid technical setups to be considered by the AI.
+  - Reduced rigid dependence on session windows. `SECONDARY` sessions (Pre-London and Late NY) now have a "High Activity" path to allow more trades.
+- **Dynamic Quality Decision**: Updated the quality logic to take `atr_percentile` into account across all pipelines ([service.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/runtime/service.py), [infer.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/pipelines/infer.py), [backtest.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/pipelines/backtest.py)).
+
+## [Fixed]
+- **Session Strictness**: Resolved the issue where no trades were being opened during active but "Secondary" market hours.
+
+---
+
 # Changelog - 2026-01-14
 
 ## Summary

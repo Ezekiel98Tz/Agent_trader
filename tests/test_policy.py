@@ -9,10 +9,21 @@ def test_policy_skips_transition():
     assert d.risk_multiplier == 0.0
 
 
-def test_policy_secondary_allows_only_good_and_caps_risk():
-    d1 = decide_quality(probability=0.60, confluence_score=3.5, market_regime="TREND", session_state="SECONDARY")
+def test_policy_secondary_allows_only_good_normally():
+    # Average trade in secondary session (not highly active) -> SKIP
+    d1 = decide_quality(probability=0.60, confluence_score=3.5, market_regime="TREND", session_state="SECONDARY", atr_percentile=0.3)
     assert d1.quality == "SKIP"
     assert d1.risk_multiplier == 0.0
-    d2 = decide_quality(probability=0.80, confluence_score=5.0, market_regime="TREND", session_state="SECONDARY")
+    
+    # Good trade in secondary session -> GOOD (with reduced risk)
+    d2 = decide_quality(probability=0.80, confluence_score=5.0, market_regime="TREND", session_state="SECONDARY", atr_percentile=0.3)
     assert d2.quality == "GOOD"
-    assert d2.risk_multiplier <= 0.5 + 1e-12
+    assert d2.risk_multiplier == 0.5
+
+
+def test_policy_secondary_allows_average_if_highly_active():
+    # Average trade in secondary session (HIGHLY ACTIVE) -> AVERAGE (with reduced risk)
+    # Confluence 2.5 is now enough for AVERAGE
+    d = decide_quality(probability=0.60, confluence_score=2.5, market_regime="TREND", session_state="SECONDARY", atr_percentile=0.8)
+    assert d.quality == "AVERAGE"
+    assert d.risk_multiplier == 0.25  # 0.5 * 0.5

@@ -70,6 +70,7 @@ def main() -> int:
             confluence_score=float(cand.confluence_score),
             market_regime=regime,  # type: ignore[arg-type]
             session_state=session_state,  # type: ignore[arg-type]
+            atr_percentile=cand.meta.get("atr_percentile"),
         )
         if decision.risk_multiplier <= 0.0 or decision.quality == "SKIP":
             continue

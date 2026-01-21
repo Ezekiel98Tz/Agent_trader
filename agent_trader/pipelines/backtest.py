@@ -88,6 +88,7 @@ def main() -> int:
             confluence_score=float(cand.confluence_score),
             market_regime=regime,  # type: ignore[arg-type]
             session_state=session_state,  # type: ignore[arg-type]
+            atr_percentile=cand.meta.get("atr_percentile"),
         )
         cand.meta["model_probability"] = float(p)
         cand.meta["quality"] = decision.quality
