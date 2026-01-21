@@ -13,7 +13,7 @@ if "%SYMBOL%"=="" set "SYMBOL=GBPUSD"
 :: 2. Paths
 set "MT4_DATA=%APPDATA%\MetaQuotes\Terminal\Common\Files\agent_trader"
 set "DATA_DIR=%MT4_DATA%"
-set "SIGNALS_DIR=%MT4_DATA%\signals"
+set "SIGNALS_DIR=%MT4_DATA%\inbox"
 set "MODEL=models\%SYMBOL%_model.joblib"
 
 echo ===================================================

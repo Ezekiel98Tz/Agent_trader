@@ -10,6 +10,7 @@ from agent_trader.market_regime.regime import classify_regime
 from agent_trader.session.session_filter import get_session_state
 from agent_trader.strategy.candles import candle_stats, is_bearish_engulfing, is_bullish_engulfing, is_pinbar
 from agent_trader.strategy.fvg import detect_fvgs_m15, latest_relevant_fvg
+from agent_trader.strategy.smc import detect_smc_features
 from agent_trader.strategy.support_resistance import compute_sr_context, distance_to_nearest, nearest_level
 from agent_trader.strategy.trend import compute_trend_context
 from agent_trader.types import Side, TradeCandidate
@@ -94,38 +95,49 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
         d_res = None if n_res is None else n_res[1]
         a14 = float(atr14.iloc[i]) if pd.notna(atr14.iloc[i]) else None
 
+        # 2. SMC Analysis (M15 context)
+        smc_ms, smc_obs = detect_smc_features(m15.iloc[max(0, i-100) : i+1])
+        
         if regime == "TREND":
-            if not training_mode:
-                if h4_dir != h1_dir or h1_dir == "range":
-                    continue
+            # Determine primary direction based on H1 trend + SMC Structure
+            if h1_dir == "up" or smc_ms.structure == "bullish":
+                side = Side.BUY
+            elif h1_dir == "down" or smc_ms.structure == "bearish":
+                side = Side.SELL
+            else:
+                # If they contradict, we still try to find a setup but with lower confidence
+                side = Side.BUY if h1_dir == "up" else Side.SELL
             
-            # During training, we accept any trend direction to see more examples
-            side = Side.BUY if h1_dir == "up" else Side.SELL
-            if training_mode and h1_dir == "range":
-                side = Side.BUY # Default to BUY for training on range data
-                
             engulf = is_bullish_engulfing(prev, cur) if side == Side.BUY else is_bearish_engulfing(prev, cur)
             candle_ok = engulf or (pin_ok and ((pin_side == "bull" and side == Side.BUY) or (pin_side == "bear" and side == Side.SELL)))
             
-            if not candle_ok and not training_mode:
+            momentum_ok = False
+            if not candle_ok:
+                if side == Side.BUY and cur["close"] > cur["open"] and cstats.body > (a14 * 0.4):
+                    momentum_ok = True
+                elif side == Side.SELL and cur["close"] < cur["open"] and cstats.body > (a14 * 0.4):
+                    momentum_ok = True
+
+            # If no candle or momentum signal, we check if we are hitting an Order Block
+            in_ob = False
+            for ob in smc_obs:
+                if not ob.is_mitigated and ob.side == ("bullish" if side == Side.BUY else "bearish"):
+                    if side == Side.BUY and cur["low"] <= ob.top and cur["close"] >= ob.bottom:
+                        in_ob = True
+                        break
+                    elif side == Side.SELL and cur["high"] >= ob.bottom and cur["close"] <= ob.top:
+                        in_ob = True
+                        break
+
+            # Now, instead of skipping, we just require at least ONE signal (Candle, Momentum, or OB)
+            if not (candle_ok or momentum_ok or in_ob) and not training_mode:
                 continue
             
-            # If still not candle_ok in training, we force a side to learn from it anyway
-            if not candle_ok and training_mode:
-                side = Side.BUY if cur["close"] > cur["open"] else Side.SELL
-
             fvg_match = latest_relevant_fvg(m15, fvgs, idx=i, side=side, max_age_bars=96)
-            if fvg_match is None and not training_mode:
-                continue
             
             if a14 is None:
                 continue
             
-            if not training_mode:
-                if side == Side.BUY and (d_sup is None or d_sup > (a14 * 1.5)):
-                    continue
-                if side == Side.SELL and (d_res is None or d_res > (a14 * 1.5)):
-                    continue
             sl = close - pips_to_price(cfg.symbol, cfg.risk_sl_pips) if side == Side.BUY else close + pips_to_price(cfg.symbol, cfg.risk_sl_pips)
             if side == Side.BUY:
                 tp_anchor = close + (d_res if d_res is not None else (a14 * 2.0))
@@ -133,45 +145,72 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
                 tp_anchor = close - (d_sup if d_sup is not None else (a14 * 2.0))
             tp = float(tp_anchor)
             rr = abs(tp - close) / abs(close - sl) if abs(close - sl) > 0 else 0.0
-            if rr < cfg.min_rr and not training_mode:
-                continue
+            
+            # STRENGTH-BASED CONFLUENCE (The new "Expert" way)
             confluence = 0.0
-            confluence += 1.0
-            confluence += 1.0 if (fvg_match and fvg_match.inside) else 0.5
+            confluence += 1.0 if h1_dir != "range" else 0.5 # Trend presence
+            confluence += 1.0 if h4_dir == h1_dir else 0.0 # Trend Alignment
+            confluence += 1.0 if smc_ms.structure == ("bullish" if side == Side.BUY else "bearish") else 0.0 # SMC Alignment
+            confluence += 1.5 if smc_ms.choch_occured else 0.0 # CHoCH is VERY strong
+            confluence += 1.25 if in_ob else 0.0 # Order Block is strong
+            confluence += 1.0 if (fvg_match and fvg_match.inside) else 0.0
+            confluence += 0.5 if candle_ok else 0.0
             confluence += 0.5 if overlap else 0.0
-            confluence += 0.5 if engulf else 0.0
             confluence += 0.25 if cstats.body > a14 * 0.25 else 0.0
-            confluence += 0.25 if atr_p is not None and atr_p >= 0.6 else 0.0
-            reason = "trend+sr+fvg+candle"
-            setup_type = "trend_follow"
+            
+            reason = "smc+choch" if smc_ms.choch_occured else ("smc+ob" if in_ob else "trend+priceaction")
+            setup_type = "smc_institutional" if (smc_ms.choch_occured or in_ob) else "trend_follow"
             fvg_size = price_to_pips(cfg.symbol, fvg_match.fvg.size) if fvg_match else 0.0
             time_since_fvg = fvg_match.age_bars if fvg_match else 0
             fvg_inside = fvg_match.inside if fvg_match else False
         else:
             if a14 is None:
                 continue
-            near_support = d_sup is not None and d_sup <= (a14 * 1.0)
-            near_res = d_res is not None and d_res <= (a14 * 1.0)
             
-            if not (near_support or near_res) and not training_mode:
+            # Loosened: In a range, we just need to be in the "buying zone" or "selling zone"
+            near_support = d_sup is not None and d_sup <= (a14 * 2.0)
+            near_res = d_res is not None and d_res <= (a14 * 2.0)
+            
+            # SMC Order Block as an alternative magnet
+            near_ob = False
+            for ob in smc_obs:
+                if not ob.is_mitigated:
+                    if ob.side == "bullish" and abs(close - ob.top) <= (a14 * 2.0):
+                        near_ob = True
+                        side = Side.BUY
+                        break
+                    elif ob.side == "bearish" and abs(close - ob.bottom) <= (a14 * 2.0):
+                        near_ob = True
+                        side = Side.SELL
+                        break
+
+            if not (near_support or near_res or near_ob) and not training_mode:
                 continue
             
-            if near_support and (not near_res or (d_sup is not None and d_res is not None and d_sup <= d_res)):
-                side = Side.BUY
-            else:
-                side = Side.SELL
+            if not near_ob:
+                if near_support and (not near_res or (d_sup is not None and d_res is not None and d_sup <= d_res)):
+                    side = Side.BUY
+                else:
+                    side = Side.SELL
+
             engulf = is_bullish_engulfing(prev, cur) if side == Side.BUY else is_bearish_engulfing(prev, cur)
             candle_ok = engulf or (pin_ok and ((pin_side == "bull" and side == Side.BUY) or (pin_side == "bear" and side == Side.SELL)))
             
-            if not candle_ok and not training_mode:
+            # Momentum fallback for range
+            momentum_ok = False
+            if not candle_ok:
+                if side == Side.BUY and cur["close"] > cur["open"] and cstats.body > (a14 * 0.3):
+                    momentum_ok = True
+                elif side == Side.SELL and cur["close"] < cur["open"] and cstats.body > (a14 * 0.3):
+                    momentum_ok = True
+
+            # Require some form of signal
+            if not (candle_ok or momentum_ok) and not training_mode:
                 continue
             
-            # Force side for training if no clear candle setup
-            if not candle_ok and training_mode:
-                side = Side.BUY if cur["close"] > cur["open"] else Side.SELL
-
             fvg_match = latest_relevant_fvg(m15, fvgs, idx=i, side=side, max_age_bars=96)
             sl = close - pips_to_price(cfg.symbol, cfg.risk_sl_pips) if side == Side.BUY else close + pips_to_price(cfg.symbol, cfg.risk_sl_pips)
+            
             if side == Side.BUY:
                 tp_anchor = (n_res[0].price if n_res is not None else (close + a14 * 2.0))
             else:
@@ -179,17 +218,16 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
             tp = float(tp_anchor)
             rr = abs(tp - close) / abs(close - sl) if abs(close - sl) > 0 else 0.0
             
-            if rr < cfg.min_rr and not training_mode:
-                continue
             confluence = 0.0
-            confluence += 1.0
-            confluence += 0.75 if ((n_sup is not None and side == Side.BUY and n_sup[0].touched >= 2) or (n_res is not None and side == Side.SELL and n_res[0].touched >= 2)) else 0.25
+            confluence += 1.0 # Base for range
+            confluence += 1.0 if ((d_sup is not None and d_sup < a14) or (d_res is not None and d_res < a14)) else 0.0
+            confluence += 1.25 if near_ob else 0.0
+            confluence += 0.5 if candle_ok else 0.0
             confluence += 0.5 if overlap else 0.0
-            confluence += 0.5 if engulf else 0.0
             confluence += 0.25 if cstats.body > a14 * 0.25 else 0.0
-            confluence += 0.25 if atr_p is not None and atr_p <= 0.4 else 0.0
             confluence += 0.25 if (fvg_match is not None and fvg_match.inside) else 0.0
-            reason = "range+sr+candle"
+            
+            reason = "range+smc_ob" if near_ob else ("range+momentum" if momentum_ok else "range+candle")
             setup_type = "mean_reversion"
             fvg_size = None if fvg_match is None else price_to_pips(cfg.symbol, fvg_match.fvg.size)
             time_since_fvg = None if fvg_match is None else fvg_match.age_bars
@@ -228,8 +266,23 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
                     "candle_body_size": float(cstats.body),
                     "candle_engulfing": bool(engulf),
                     "candle_pinbar": bool(pin_ok),
+                    "smc_structure": smc_ms.structure,
+                    "smc_choch": bool(smc_ms.choch_occured),
+                    "smc_in_ob": bool(in_ob),
                 },
             )
         )
+
+    if live_gate and not out:
+        # Diagnostic for the user
+        last_idx = len(m15) - 1
+        if last_idx >= 0:
+            last_regime = classify_regime(
+                ema50_slope=float(h1_ctx.ema50_slope.iloc[h1_idx]), 
+                ema_alignment=float(h1_ctx.ema_alignment.iloc[h1_idx]), 
+                atr_percentile=(None if pd.isna(atr_pct.iloc[last_idx]) else float(atr_pct.iloc[last_idx]))
+            )
+            # We don't print every time, maybe just a hint
+            # print(f"DEBUG: Last bar regime: {last_regime}")
 
     return out

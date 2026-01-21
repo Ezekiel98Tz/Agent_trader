@@ -4,18 +4,25 @@
 Today's updates addressed the "strict session rules" concern by implementing a smarter, volatility-aware trade quality logic. The system now adapts to market conditions (ATR) rather than relying solely on rigid clock hours.
 
 ## [Added]
-- **Volatility-Aware Trade Quality**: Implemented "Market Activity Override" in [quality.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/policy/quality.py). 
-  - If market volatility is high (ATR in the top 30% of recent history), the bot is now smarter and allows `AVERAGE` quality trades even in `SECONDARY` sessions.
-  - This ensures we capture big moves regardless of the exact time, provided the market is "active".
+- **Institutional SMC Strategy**: Implemented **Order Blocks (OB)** and **Change of Character (CHoCH)** detection in [smc.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/strategy/smc.py).
+  - The bot now identifies where big banks are buying/selling (Order Blocks) and detects trend reversals (CHoCH) faster than EMAs.
+- **Strength-Based Confluence**: Refactored [generator.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/strategy/generator.py) to use a "Weighted Strength" system.
+  - Removed strict "Trend Blockers". If multiple strategies contradict (e.g., EMA is down but SMC is bullish), the bot now calculates a total strength score instead of just skipping.
+- **New AI Features**: Updated [builder.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/features/builder.py) to include `smc_structure`, `smc_choch`, and `smc_in_ob`. The AI model can now learn specifically from these institutional footprints.
+
+## [Fixed]
+- **MT4/MT5 Signal Execution**: Resolved "Nothing on MT4" issue by correcting the output directory in [start_trading.bat](file:///c:/Users/hp/Documents/trae_projects/agent_trader/start_trading.bat). Signals now go to the correct `inbox` folder where the EA expects them.
+- **Signal Deduplication**: Implemented a "One Signal per Bar" rule in [service.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/runtime/service.py) to prevent rapid-fire signals on the same M15 candle.
+- **Historical Signal Filter**: Added a 30-minute lookback limit in [service.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/runtime/service.py) to prevent the bot from trying to trade old setups when it first starts.
+- **Symbol Suffix Matching**: Updated [AgentTraderSignalEA.mq4](file:///c:/Users/hp/Documents/trae_projects/agent_trader/mt4_ea/AgentTraderSignalEA.mq4) and [AgentTraderSignalEA.mq5](file:///c:/Users/hp/Documents/trae_projects/agent_trader/mt5_ea/AgentTraderSignalEA.mq5) with flexible symbol matching (e.g., matching `GBPUSD` to `GBPUSDb`).
 
 ## [Improved]
+- **Increased Trading Limits**: Updated [config.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/config.py) to allow 10 signals per day and 30 per week, reflecting the increased activity of the new SMC strategy.
+- **Loosened Quality Logic**: Updated [quality.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/policy/quality.py) to allow trades with very high technical confluence (SMC setups) even if AI probability is just at the threshold.
 - **Loosened Entry Requirements**:
   - Lowered the minimum `confluence_score` for `AVERAGE` trades from `3.0` to `2.5`. This allows more valid technical setups to be considered by the AI.
   - Reduced rigid dependence on session windows. `SECONDARY` sessions (Pre-London and Late NY) now have a "High Activity" path to allow more trades.
 - **Dynamic Quality Decision**: Updated the quality logic to take `atr_percentile` into account across all pipelines ([service.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/runtime/service.py), [infer.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/pipelines/infer.py), [backtest.py](file:///c:/Users/hp/Documents/trae_projects/agent_trader/agent_trader/pipelines/backtest.py)).
-
-## [Fixed]
-- **Session Strictness**: Resolved the issue where no trades were being opened during active but "Secondary" market hours.
 
 ---
 

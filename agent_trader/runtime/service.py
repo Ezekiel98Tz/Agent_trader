@@ -98,6 +98,8 @@ def run_once(
     state_path = Path(state_file)
     state = _read_state(state_path, now)
     signals_today = int(state.get("signals_today", 0))
+    last_signal_time = state.get("last_signal_time")
+
     if signals_today >= int(max_signals_per_day):
         return ServiceStatus(
             time_utc=now.isoformat(),
@@ -156,6 +158,13 @@ def run_once(
 
     artifacts = load_model(model_path)
     candidates = generate_candidates(CandidateInputs(h4=h4, h1=h1, m15=m15), cfg=cfg, live_gate=True)
+    
+    # Filter for recent candidates only in live/paper mode
+    if mode in ["live", "paper"]:
+        # Only consider candidates from the last 2 bars (30 mins) to avoid historical signaling
+        cutoff_time = latest_t - pd.Timedelta(minutes=30)
+        candidates = [c for c in candidates if c.time >= cutoff_time]
+
     if not candidates:
         return ServiceStatus(
             time_utc=now_iso,
@@ -190,6 +199,12 @@ def run_once(
     for cand, p in ranked:
         if float(p) < float(min_prob):
             continue
+        
+        # Deduplication: Don't send multiple signals for the same bar
+        cand_time_str = cand.time.isoformat() if hasattr(cand.time, "isoformat") else str(cand.time)
+        if last_signal_time == cand_time_str:
+            continue
+
         regime = str(cand.meta.get("market_regime") or "TRANSITION")
         session_state = str(cand.meta.get("session_state") or "BLOCKED")
         decision = decide_quality(
@@ -219,6 +234,7 @@ def run_once(
         )
         write_signal_csv(sig, out_dir=out_path)
         state["signals_today"] = int(signals_today) + 1
+        state["last_signal_time"] = cand_time_str
         _write_state(state_path, state)
         return ServiceStatus(
             time_utc=now_iso,
@@ -311,8 +327,9 @@ def main() -> int:
 
             _write_status(status_path, s)
             
-            # UX Improvement: Print status message to console
-            status_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Monitoring... | Session: {s.session_state} | Signals Today: {s.signals_today}"
+            # UX Improvement: Print status message to console with London time
+            london_now = datetime.now(DEFAULT_CONFIG.timezone).strftime('%H:%M')
+            status_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Monitoring... (London: {london_now}) | Session: {s.session_state} | Signals Today: {s.signals_today}"
             if s.wrote_signal:
                 status_msg += f" | 🔥 SIGNAL SENT: {s.last_signal_id}"
             else:

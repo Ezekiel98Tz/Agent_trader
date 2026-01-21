@@ -34,11 +34,12 @@ def decide_quality(
 
     # 3. Base Quality Classification
     # We use a combination of AI probability and Technical confluence
-    if probability >= 0.65 and confluence_score >= 4.0 and market_regime == "TREND":
+    # GOOD: High probability OR very high confluence (Institutional)
+    if (probability >= 0.65 and confluence_score >= 3.5) or (confluence_score >= 5.0):
         base = QualityDecision(quality="GOOD", risk_multiplier=1.0)
-    elif probability >= 0.62 and confluence_score >= 4.0 and market_regime == "RANGE":
+    elif probability >= 0.62 and confluence_score >= 3.0:
         base = QualityDecision(quality="GOOD", risk_multiplier=0.75)
-    elif probability >= 0.60 and confluence_score >= 2.5:
+    elif probability >= 0.60 and confluence_score >= 2.0:
         base = QualityDecision(quality="AVERAGE", risk_multiplier=0.5)
     else:
         base = QualityDecision(quality="SKIP", risk_multiplier=0.0)

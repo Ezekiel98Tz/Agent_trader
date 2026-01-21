@@ -320,11 +320,13 @@ void OnTick()
       MarkSignalConsumed(filename);
       return;
    }
-
    g_last_signal_id = id;
 
-   if(symbol != _Symbol)
+   // Flexible symbol matching (checks if one contains the other, e.g., GBPUSD vs GBPUSDb)
+   string current_sym = _Symbol;
+   if(StringFind(symbol, current_sym) < 0 && StringFind(current_sym, symbol) < 0)
    {
+      Print("Signal ignored: Symbol mismatch (Signal: ", symbol, ", Chart: ", current_sym, ")");
       MarkSignalConsumed(filename);
       return;
    }

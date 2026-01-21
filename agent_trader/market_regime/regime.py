@@ -29,17 +29,23 @@ def classify_regime(
 ) -> MarketRegime:
     if ema50_slope is None or ema_alignment is None or atr_percentile is None:
         return "TRANSITION"
+    
+    # Loosened: If there's enough volatility, we lean towards TREND
     if (
-        abs(ema50_slope) >= th.ema_slope_trend
-        and abs(ema_alignment) >= th.ema_alignment_trend
-        and atr_percentile >= th.atr_percentile_trend
+        abs(ema50_slope) >= th.ema_slope_range
+        and atr_percentile >= 0.5
     ):
         return "TREND"
+        
+    # If it's very quiet, it's a RANGE
     if (
-        abs(ema50_slope) <= th.ema_slope_range
-        and abs(ema_alignment) <= th.ema_alignment_range
-        and atr_percentile <= th.atr_percentile_range
+        atr_percentile <= th.atr_percentile_range
     ):
         return "RANGE"
+        
+    # Default to TREND if not extremely quiet, to allow the AI to find patterns
+    if atr_percentile > 0.4:
+        return "TREND"
+        
     return "TRANSITION"
 

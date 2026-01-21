@@ -13,8 +13,8 @@ class TradingConfig:
     risk_sl_pips: float = 17.5
     risk_percent_per_trade: float = 1.0  # Percentage of account to risk (if EA supports)
     min_rr: float = 1.2
-    max_signals_per_day: int = 3
-    max_trades_per_week: int = 5
+    max_signals_per_day: int = 10
+    max_trades_per_week: int = 30
     max_spread_pips: float = 2.5
     
     # Session Timing (London Time / UTC+0)
