@@ -14,8 +14,8 @@ def write_signal_json(signal: TradeSignal, *, out_dir: str | Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     payload = asdict(signal)
     payload["time_utc"] = signal.time_utc.astimezone(timezone.utc).isoformat()
-    path = p / f"signal_{signal.id}.json"
-    tmp = p / f".signal_{signal.id}.json.tmp"
+    path = p / f"signal_{signal.symbol}_{signal.id}.json"
+    tmp = p / f".signal_{signal.symbol}_{signal.id}.json.tmp"
     tmp.write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
     tmp.replace(path)
     return path
@@ -24,7 +24,12 @@ def write_signal_json(signal: TradeSignal, *, out_dir: str | Path) -> Path:
 def write_signal_csv(signal: TradeSignal, *, out_dir: str | Path) -> Path:
     p = Path(out_dir)
     p.mkdir(parents=True, exist_ok=True)
-    ts = signal.time_utc.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # MQL4 friendly format: YYYY.MM.DD HH:MM:SS
+    # Use naive time (Broker Time) for perfect sync with MT4
+    ts_dt = signal.time_utc
+    if ts_dt.tzinfo is not None:
+        ts_dt = ts_dt.astimezone(timezone.utc).replace(tzinfo=None)
+    ts = ts_dt.strftime("%Y.%m.%d %H:%M:%S")
     line = ",".join(
         [
             signal.id,
@@ -43,8 +48,8 @@ def write_signal_csv(signal: TradeSignal, *, out_dir: str | Path) -> Path:
             signal.mode,
         ]
     )
-    path = p / f"signal_{signal.id}.csv"
-    tmp = p / f".signal_{signal.id}.csv.tmp"
+    path = p / f"signal_{signal.symbol}_{signal.id}.csv"
+    tmp = p / f".signal_{signal.symbol}_{signal.id}.csv.tmp"
     tmp.write_text(line)
     tmp.replace(path)
     return path

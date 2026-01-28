@@ -114,6 +114,7 @@ bool StopsValid(const bool buy, const double sl, const double tp)
 bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, double &entry, double &sl, double &tp, double &confluence, double &prob, string &session_state, string &regime, string &quality, double &risk_mult, string &mode, string &path_out)
 {
    string subdir = InboxSubdir;
+   string current_sym = _Symbol;
    int handle = FileFindFirst(subdir + "\\signal_*.csv", path_out, FILE_COMMON);
    if(handle == INVALID_HANDLE)
       return false;
@@ -126,6 +127,20 @@ bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, d
          if(!FileFindNext(handle, path_out))
             break;
          continue;
+      }
+
+      // Extract symbol from filename signal_{SYMBOL}_{ID}.csv
+      string file_parts[];
+      ushort file_sep = StringGetCharacter("_", 0);
+      if(StringSplit(path_out, file_sep, file_parts) >= 2)
+      {
+         string file_sym = file_parts[1];
+         if(file_sym != "" && StringFind(current_sym, file_sym) < 0 && StringFind(file_sym, current_sym) < 0)
+         {
+            if(!FileFindNext(handle, path_out))
+               break;
+            continue;
+         }
       }
 
       int fh = FileOpen(subdir + "\\" + path_out, FILE_READ|FILE_COMMON|FILE_ANSI);
@@ -162,8 +177,15 @@ bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, d
       quality = parts[11];
       risk_mult = StringToDouble(parts[12]);
       mode = parts[13];
-      found = true;
-      break;
+
+      if(StringFind(symbol, current_sym) >= 0 || StringFind(current_sym, symbol) >= 0)
+      {
+         found = true;
+         break;
+      }
+
+      if(!FileFindNext(handle, path_out))
+         break;
    }
 
    FileFindClose(handle);
@@ -320,6 +342,17 @@ void OnTick()
       MarkSignalConsumed(filename);
       return;
    }
+   
+   // Check if signal is too old (> 15 mins)
+   // Comparison using Broker Time (TimeCurrent) for perfect sync with exported data
+   datetime now_broker = TimeCurrent();
+   if(now_broker - t_utc > 900) // 15 minutes
+   {
+      Print("Signal ", id, " is too old (", (now_broker - t_utc), "s). Expiring...");
+      MarkSignalConsumed(filename);
+      return;
+   }
+
    g_last_signal_id = id;
 
    // Flexible symbol matching (checks if one contains the other, e.g., GBPUSD vs GBPUSDb)

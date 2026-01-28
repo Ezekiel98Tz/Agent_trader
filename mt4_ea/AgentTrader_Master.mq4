@@ -32,6 +32,7 @@ input int      DayCloseMinute        = 30;
 //--- Global Variables
 string g_last_signal_id = "";
 datetime g_last_export = 0;
+datetime g_last_heartbeat = 0;
 string g_ai_status = "Waiting for Sync...";
 string g_market_regime = "Analyzing...";
 
@@ -81,19 +82,40 @@ void OnTick()
    datetime t_utc;
    double entry, sl, tp, confluence, prob, risk_mult;
 
+   // Heartbeat log every 60 seconds
+   if(TimeCurrent() - g_last_heartbeat >= 60)
+   {
+      Print("[AgentTrader] Scanning for signals in: ", InboxSubdir, "...");
+      g_last_heartbeat = TimeCurrent();
+   }
+
    if(ReadNextSignal(id, t_utc, symbol, side, entry, sl, tp, confluence, prob, session_state, regime, quality, risk_mult, mode, filename))
    {
       g_market_regime = regime;
-      if(id != g_last_signal_id && symbol == Symbol())
+      
+      // 1. Check if it's already the last one we saw
+      if(id == g_last_signal_id)
       {
-         g_last_signal_id = id;
-         _process_trade(side, entry, sl, tp, prob, risk_mult, quality, mode, filename);
-      }
-      else {
          MarkSignalConsumed(filename);
+         return;
       }
+      
+      // 2. Check if signal is too old (> 15 mins)
+      // Comparison using Broker Time (TimeCurrent) for perfect sync with exported data
+      datetime now_broker = TimeCurrent();
+      if(now_broker - t_utc > 900) // 15 minutes
+      {
+         Print("[AgentTrader] Signal ", id, " is too old (", (now_broker - t_utc), "s). Expiring...");
+         MarkSignalConsumed(filename);
+         return;
+      }
+
+      // 3. Process the trade (ReadNextSignal already filtered for symbol match)
+      g_last_signal_id = id;
+      Print("[AgentTrader] New Signal Detected: ", side, " ", symbol, " @ ", entry, " (ID: ", id, ")");
+      _process_trade(side, entry, sl, tp, prob, risk_mult, quality, mode, filename);
    }
-   
+
    _update_dashboard();
 }
 
@@ -136,12 +158,29 @@ void _process_trade(string side, double entry, double sl, double tp, double prob
 {
    bool do_trade = AutoTrade && !VisualOnly && (mode == "live" || mode == "paper") && (quality != "SKIP");
    
+   if(!AutoTrade) Print("[AgentTrader] Trade SKIPPED: 'AutoTrade' is set to false in EA inputs.");
+   if(VisualOnly) Print("[AgentTrader] Trade SKIPPED: 'VisualOnly' mode is enabled.");
+   if(quality == "SKIP") Print("[AgentTrader] Trade SKIPPED: AI Quality logic returned 'SKIP'.");
+
    int trades_today = GetTradesToday();
    double daily_pnl = AccountBalance() - GetStartBalance();
    double spread = (Ask - Bid) / _pip();
 
-   if(trades_today >= MaxTradesPerDay || (MaxDailyLossMoney > 0 && daily_pnl <= -MaxDailyLossMoney) || spread > MaxSpreadPips)
+   if(trades_today >= MaxTradesPerDay)
+   {
+      Print("[AgentTrader] Trade SKIPPED: MaxTradesPerDay (", MaxTradesPerDay, ") reached.");
       do_trade = false;
+   }
+   if(MaxDailyLossMoney > 0 && daily_pnl <= -MaxDailyLossMoney)
+   {
+      Print("[AgentTrader] Trade SKIPPED: MaxDailyLossMoney (", MaxDailyLossMoney, ") reached.");
+      do_trade = false;
+   }
+   if(spread > MaxSpreadPips)
+   {
+      Print("[AgentTrader] Trade SKIPPED: Current Spread (", spread, ") exceeds MaxSpreadPips (", MaxSpreadPips, ").");
+      do_trade = false;
+   }
 
    if(do_trade)
    {
@@ -152,8 +191,19 @@ void _process_trade(string side, double entry, double sl, double tp, double prob
       
       if(_stops_valid(cmd == OP_BUY, sl_n, tp_n))
       {
+         Print("[AgentTrader] Attempting to Open ", side, " Order...");
          int ticket = OrderSend(Symbol(), cmd, Lots * risk_mult, price, SlippagePoints, sl_n, tp_n, "AgentTrader", MagicNumber, 0, (cmd == OP_BUY ? clrBlue : clrRed));
-         if(ticket > 0) IncTradesToday();
+         if(ticket > 0) 
+         {
+            Print("[AgentTrader] Trade OPENED Successfully! Ticket: ", ticket);
+            IncTradesToday();
+         }
+         else {
+            Print("[AgentTrader] Trade FAILED. Error Code: ", GetLastError());
+         }
+      }
+      else {
+         Print("[AgentTrader] Trade SKIPPED: Invalid Stops (SL: ", sl_n, ", TP: ", tp_n, "). Check Broker StopLevels.");
       }
    }
    MarkSignalConsumed(filename);
@@ -209,8 +259,13 @@ bool _stops_valid(bool b, double sl, double tp) {
 bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, double &entry, double &sl, double &tp, double &confluence, double &prob, string &session_state, string &regime, string &quality, double &risk_mult, string &mode, string &filename_out)
 {
    string subdir = InboxSubdir;
+   string current_sym = Symbol();
+   
+   // Search for signals that start with our symbol or generic 'signal_'
+   // The new format is signal_SYMBOL_ID.csv
    long handle = FileFindFirst(subdir + "\\signal_*.csv", filename_out, FILE_COMMON);
    if(handle == INVALID_HANDLE) return false;
+   
    bool found = false;
    while(true)
    {
@@ -219,16 +274,58 @@ bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, d
          if(!FileFindNext(handle, filename_out)) break;
          continue;
       }
+      
+      // Check if this signal belongs to our symbol (flexible match)
+      // signal_GBPUSD_123.csv matches chart GBPUSDb
+      bool sym_match = (StringFind(filename_out, current_sym) >= 0 || StringFind(current_sym, symbol) >= 0);
+      
+      // If the filename contains another symbol's name, skip it (unless it's ours)
+      // This prevents GBPUSD EA from consuming USDCAD signals
+      if(!sym_match && StringFind(filename_out, "signal_") == 0)
+      {
+         // Extract symbol from filename signal_{SYMBOL}_{ID}.csv
+         string file_parts[]; 
+         ushort file_sep = StringGetCharacter("_", 0);
+         if(StringSplit(filename_out, file_sep, file_parts) >= 2)
+         {
+             string file_sym = file_parts[1];
+             if(file_sym != "" && StringFind(current_sym, file_sym) < 0 && StringFind(file_sym, current_sym) < 0)
+             {
+                 if(!FileFindNext(handle, filename_out)) break;
+                 continue;
+             }
+         }
+      }
+
       int fh = FileOpen(subdir + "\\" + filename_out, FILE_READ|FILE_COMMON|FILE_ANSI);
       if(fh == INVALID_HANDLE) { if(!FileFindNext(handle, filename_out)) break; continue; }
       string line = FileReadString(fh); FileClose(fh);
       string parts[]; ushort sep = StringGetCharacter(",", 0); int n = StringSplit(line, sep, parts);
       if(n < 14) { if(!FileFindNext(handle, filename_out)) break; continue; }
-      id = parts[0]; t_utc = (datetime)StringToTime(parts[1]); symbol = parts[2]; side = parts[3];
-      entry = StringToDouble(parts[4]); sl = StringToDouble(parts[5]); tp = StringToDouble(parts[6]);
-      confluence = StringToDouble(parts[7]); prob = StringToDouble(parts[8]); session_state = parts[9];
-      regime = parts[10]; quality = parts[11]; risk_mult = StringToDouble(parts[12]); mode = parts[13];
-      found = true; break;
+      
+      id = parts[0]; 
+      t_utc = (datetime)StringToTime(parts[1]); 
+      symbol = parts[2]; 
+      side = parts[3];
+      entry = StringToDouble(parts[4]); 
+      sl = StringToDouble(parts[5]); 
+      tp = StringToDouble(parts[6]);
+      confluence = StringToDouble(parts[7]); 
+      prob = StringToDouble(parts[8]); 
+      session_state = parts[9];
+      regime = parts[10]; 
+      quality = parts[11]; 
+      risk_mult = StringToDouble(parts[12]); 
+      mode = parts[13];
+      
+      // Final sanity check: is this signal for us?
+      if(StringFind(symbol, current_sym) >= 0 || StringFind(current_sym, symbol) >= 0)
+      {
+         found = true; 
+         break;
+      }
+      
+      if(!FileFindNext(handle, filename_out)) break;
    }
    FileFindClose(handle); return found;
 }

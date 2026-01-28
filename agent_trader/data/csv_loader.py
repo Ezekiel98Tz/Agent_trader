@@ -28,9 +28,11 @@ def load_ohlcv_csv(
             time.sleep(0.5)
     if time_col not in df.columns:
         raise ValueError(f"Missing '{time_col}' column in {p}")
-    df[time_col] = pd.to_datetime(df[time_col], utc=True, errors="raise")
+    # interpretation as naive (Broker Time)
+    df[time_col] = pd.to_datetime(df[time_col], errors="raise")
     if tz and tz != "UTC":
-        df[time_col] = df[time_col].dt.tz_convert(tz)
+        # If user explicitly wants conversion, they can provide tz
+        df[time_col] = df[time_col].dt.tz_localize("UTC").dt.tz_convert(tz)
     rename = {}
     if schema == "mt5":
         rename = {

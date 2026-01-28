@@ -53,6 +53,17 @@ void OnTick()
       MarkSignalConsumed(filename);
       return;
    }
+   
+   // Check if signal is too old (> 15 mins)
+   // Comparison using Broker Time (TimeCurrent) for perfect sync with exported data
+   datetime now_broker = TimeCurrent();
+   if(now_broker - t_utc > 900) // 15 minutes
+   {
+      Print("Signal ", id, " is too old (", (now_broker - t_utc), "s). Expiring...");
+      MarkSignalConsumed(filename);
+      return;
+   }
+
    g_last_signal_id = id;
 
    // Flexible symbol matching (checks if one contains the other, e.g., GBPUSD vs GBPUSDb)
@@ -225,61 +236,63 @@ bool StopsValid(const bool buy, const double sl, const double tp)
 bool ReadNextSignal(string &id, datetime &t_utc, string &symbol, string &side, double &entry, double &sl, double &tp, double &confluence, double &prob, string &session_state, string &regime, string &quality, double &risk_mult, string &mode, string &filename_out)
 {
    string subdir = InboxSubdir;
+   string current_sym = Symbol();
+   
    long handle = FileFindFirst(subdir + "\\signal_*.csv", filename_out, FILE_COMMON);
-   if(handle == INVALID_HANDLE)
-      return false;
-
+   if(handle == INVALID_HANDLE) return false;
+   
    bool found = false;
    while(true)
    {
       if(filename_out == "" || !FileIsExist(subdir + "\\" + filename_out, FILE_COMMON))
       {
-         if(!FileFindNext(handle, filename_out))
-            break;
+         if(!FileFindNext(handle, filename_out)) break;
          continue;
+      }
+      
+      // Extract symbol from filename signal_{SYMBOL}_{ID}.csv
+      string file_parts[]; 
+      ushort file_sep = StringGetCharacter("_", 0);
+      if(StringSplit(filename_out, file_sep, file_parts) >= 2)
+      {
+          string file_sym = file_parts[1];
+          if(file_sym != "" && StringFind(current_sym, file_sym) < 0 && StringFind(file_sym, current_sym) < 0)
+          {
+              if(!FileFindNext(handle, filename_out)) break;
+              continue;
+          }
       }
 
       int fh = FileOpen(subdir + "\\" + filename_out, FILE_READ|FILE_COMMON|FILE_ANSI);
-      if(fh == INVALID_HANDLE)
-      {
-         if(!FileFindNext(handle, filename_out))
-            break;
-         continue;
-      }
-
-      string line = FileReadString(fh);
-      FileClose(fh);
-
-      string parts[];
-      ushort sep = StringGetCharacter(",", 0);
-      int n = StringSplit(line, sep, parts);
-      if(n < 14)
-      {
-         if(!FileFindNext(handle, filename_out))
-            break;
-         continue;
-      }
-
-      id = parts[0];
-      t_utc = (datetime)StringToTime(parts[1]);
-      symbol = parts[2];
+      if(fh == INVALID_HANDLE) { if(!FileFindNext(handle, filename_out)) break; continue; }
+      string line = FileReadString(fh); FileClose(fh);
+      string parts[]; ushort sep = StringGetCharacter(",", 0); int n = StringSplit(line, sep, parts);
+      if(n < 14) { if(!FileFindNext(handle, filename_out)) break; continue; }
+      
+      id = parts[0]; 
+      t_utc = (datetime)StringToTime(parts[1]); 
+      symbol = parts[2]; 
       side = parts[3];
-      entry = StringToDouble(parts[4]);
-      sl = StringToDouble(parts[5]);
+      entry = StringToDouble(parts[4]); 
+      sl = StringToDouble(parts[5]); 
       tp = StringToDouble(parts[6]);
-      confluence = StringToDouble(parts[7]);
-      prob = StringToDouble(parts[8]);
+      confluence = StringToDouble(parts[7]); 
+      prob = StringToDouble(parts[8]); 
       session_state = parts[9];
-      regime = parts[10];
-      quality = parts[11];
-      risk_mult = StringToDouble(parts[12]);
+      regime = parts[10]; 
+      quality = parts[11]; 
+      risk_mult = StringToDouble(parts[12]); 
       mode = parts[13];
-      found = true;
-      break;
+      
+      if(StringFind(symbol, current_sym) >= 0 || StringFind(current_sym, symbol) >= 0)
+      {
+         found = true; 
+         break;
+      }
+      
+      if(!FileFindNext(handle, filename_out)) break;
    }
-
-   FileFindClose(handle);
-   return found;
+   FileFindClose(handle); return found;
 }
 
 void MarkSignalConsumed(const string filename)

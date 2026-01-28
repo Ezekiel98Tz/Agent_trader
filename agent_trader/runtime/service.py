@@ -32,6 +32,7 @@ class ServiceStatus:
     signals_today: int
     spread_pips: float | None
     last_error: str | None
+    skipped_reasons: list[str] = None  # Added field
 
 
 def _write_status(path: Path, status: ServiceStatus) -> None:
@@ -110,6 +111,7 @@ def run_once(
             signals_today=signals_today,
             spread_pips=None,
             last_error="max_signals_per_day_reached",
+            skipped_reasons=[],
         )
 
     spread_pips: float | None = None
@@ -133,6 +135,7 @@ def run_once(
                 signals_today=signals_today,
                 spread_pips=float(spread_pips),
                 last_error="spread_too_high",
+                skipped_reasons=[],
             )
     else:
         h4 = load_ohlcv_csv(h4_path, schema="generic")
@@ -154,6 +157,7 @@ def run_once(
             signals_today=signals_today,
             spread_pips=spread_pips,
             last_error=None,
+            skipped_reasons=[],
         )
 
     artifacts = load_model(model_path)
@@ -175,6 +179,7 @@ def run_once(
             signals_today=signals_today,
             spread_pips=spread_pips,
             last_error=None,
+            skipped_reasons=[],
         )
 
     feat_rows = build_feature_rows(cfg=cfg, h4=h4, h1=h1, m15=m15, candidates=candidates)
@@ -189,6 +194,7 @@ def run_once(
             signals_today=signals_today,
             spread_pips=spread_pips,
             last_error=None,
+            skipped_reasons=[],
         )
 
     probs = predict_proba(artifacts, feat_df)
@@ -196,26 +202,38 @@ def run_once(
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
+    skipped_reasons = []
+
     for cand, p in ranked:
-        if float(p) < float(min_prob):
-            continue
+        prob_val = float(p)
+        conf_val = float(cand.confluence_score)
         
         # Deduplication: Don't send multiple signals for the same bar
         cand_time_str = cand.time.isoformat() if hasattr(cand.time, "isoformat") else str(cand.time)
         if last_signal_time == cand_time_str:
+            skipped_reasons.append(f"Duplicate bar ({cand_time_str})")
             continue
 
         regime = str(cand.meta.get("market_regime") or "TRANSITION")
         session_state = str(cand.meta.get("session_state") or "BLOCKED")
         decision = decide_quality(
-            probability=float(p),
-            confluence_score=float(cand.confluence_score),
+            probability=prob_val,
+            confluence_score=conf_val,
             market_regime=regime,  # type: ignore[arg-type]
             session_state=session_state,  # type: ignore[arg-type]
             atr_percentile=cand.meta.get("atr_percentile"),
         )
+        
+        # Technical Override Check (for logging)
+        is_tech_override = (conf_val >= 4.0 and prob_val < 0.50)
+        
         if decision.quality == "SKIP" or decision.risk_multiplier <= 0.0:
+            reason = f"Quality SKIP (Prob: {prob_val:.2f}, Conf: {conf_val:.2f}, Regime: {regime})"
+            skipped_reasons.append(reason)
             continue
+
+        # If we reached here, it's a valid signal
+        sig_id_suffix = " (TECH OVERRIDE)" if is_tech_override else ""
 
         sig = make_signal(
             symbol=cand.symbol,
@@ -241,10 +259,11 @@ def run_once(
             session_state=ss,
             candidates=len(candidates),
             wrote_signal=True,
-            last_signal_id=sig.id,
+            last_signal_id=sig.id + sig_id_suffix,
             signals_today=int(state["signals_today"]),
             spread_pips=spread_pips,
             last_error=None,
+            skipped_reasons=skipped_reasons,
         )
 
     return ServiceStatus(
@@ -256,6 +275,7 @@ def run_once(
         signals_today=signals_today,
         spread_pips=spread_pips,
         last_error=None,
+        skipped_reasons=skipped_reasons,
     )
 
 
@@ -271,7 +291,7 @@ def main() -> int:
     ap.add_argument("--bars-h4", type=int, default=500)
     ap.add_argument("--model", required=True)
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--min-prob", type=float, default=0.60)
+    ap.add_argument("--min-prob", type=float, default=0.55)
     ap.add_argument("--mode", default="paper")
     ap.add_argument("--interval-seconds", type=int, default=60)
     ap.add_argument("--status-file", default="service_status.json")
@@ -323,6 +343,7 @@ def main() -> int:
                     signals_today=0,
                     spread_pips=None,
                     last_error=str(e),
+                    skipped_reasons=[],
                 )
 
             _write_status(status_path, s)
@@ -334,8 +355,10 @@ def main() -> int:
                 status_msg += f" | 🔥 SIGNAL SENT: {s.last_signal_id}"
             else:
                 status_msg += f" | Setups Found: {s.candidates}"
-                if s.candidates > 0:
-                    status_msg += " (AI filter active)"
+                if s.candidates > 0 and s.skipped_reasons:
+                    # Show the first few reasons why it was skipped
+                    reasons_str = ", ".join(s.skipped_reasons[:2])
+                    status_msg += f" (AI Filter: {reasons_str})"
             
             if s.last_error:
                 status_msg += f" | ⚠️ ERROR: {s.last_error}"

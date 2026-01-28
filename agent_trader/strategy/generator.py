@@ -77,8 +77,14 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
         ema_slope = float(h1_ctx.ema50_slope.iloc[h1_idx])
         ema_align = float(h1_ctx.ema_alignment.iloc[h1_idx])
         regime = classify_regime(ema50_slope=ema_slope, ema_alignment=ema_align, atr_percentile=atr_p)
+        
+        # We allow TRANSITION regime if it's an SMC setup (CHoCH or OB)
+        # Otherwise, the EMA-based trend/range logic might miss the very start of an institutional move.
         if regime == "TRANSITION":
-            continue
+            # Just peek at SMC features for this candle
+            tmp_ms, tmp_obs = detect_smc_features(m15.iloc[max(0, i-100) : i+1])
+            if not (tmp_ms.choch_occured or any(not ob.is_mitigated for ob in tmp_obs)):
+                continue
 
         if h1_idx != last_sr_h1_idx:
             last_sr_h1_idx = h1_idx
@@ -98,7 +104,7 @@ def generate_candidates(data: CandidateInputs, *, cfg: TradingConfig, live_gate:
         # 2. SMC Analysis (M15 context)
         smc_ms, smc_obs = detect_smc_features(m15.iloc[max(0, i-100) : i+1])
         
-        if regime == "TREND":
+        if regime == "TREND" or regime == "TRANSITION":
             # Determine primary direction based on H1 trend + SMC Structure
             if h1_dir == "up" or smc_ms.structure == "bullish":
                 side = Side.BUY

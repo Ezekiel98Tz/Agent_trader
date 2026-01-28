@@ -74,7 +74,6 @@ python -m agent_trader.runtime.service ^
   --symbol "%ACTUAL_SYMBOL%" ^
   --model "%MODEL%" ^
   --out-dir "%SIGNALS_DIR%" ^
-  --min-prob 0.60 ^
   --interval-seconds 60 ^
   --mode live
 
